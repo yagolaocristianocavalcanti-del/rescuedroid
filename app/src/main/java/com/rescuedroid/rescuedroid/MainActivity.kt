@@ -276,7 +276,7 @@ class MainActivity : ComponentActivity() {
                             title = "Iniciar mirror",
                             message = "Enviar o comando de inicializacao do scrcpy-server no aparelho remoto?",
                             confirmLabel = "Iniciar"
-                        ) { vm.startMirror() }
+                        ) { vm.startMirror(context) }
                     },
                     modifier = Modifier.weight(1f)
                 ) { Text("📺 Mirror", fontSize = 10.sp) }

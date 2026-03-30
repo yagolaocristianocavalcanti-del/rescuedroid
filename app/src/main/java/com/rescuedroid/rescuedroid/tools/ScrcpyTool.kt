@@ -13,7 +13,11 @@ object ScrcpyTool {
             val jarBytes = context.assets.open("scrcpy-server.jar").use { it.readBytes() }
             
             // 2. Envia para o celular remoto
-            AdbManager.pushFile(jarBytes, "/data/local/tmp/scrcpy-server.jar")
+            val pushed = AdbManager.pushFile(jarBytes, "/data/local/tmp/scrcpy-server.jar")
+            if (!pushed) {
+                Log.e("SCRCPY", "Falha ao enviar scrcpy-server.jar")
+                return@withContext false
+            }
             
             // 3. Comando para iniciar o servidor do scrcpy
             // Nota: Versão 2.0+ do scrcpy

@@ -1,6 +1,7 @@
 package com.rescuedroid.rescuedroid
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import androidx.compose.runtime.getValue
@@ -11,6 +12,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.rescuedroid.rescuedroid.adb.AdbManager
 import com.rescuedroid.rescuedroid.adb.UsbAdbConnector
+import com.rescuedroid.rescuedroid.mirror.MirrorActivity
+import com.rescuedroid.rescuedroid.tools.ScrcpyTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
@@ -353,11 +356,23 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    fun startMirror() {
+    fun startMirror(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
-            addLog("📺 Iniciando Mirror...")
-            AdbManager.execAsync("CLASSPATH=/data/local/tmp/scrcpy-server.jar app_process / com.genymobile.scrcpy.Server 2.0")
-            addLog("✅ Comando mirror enviado")
+            if (!isConnected) {
+                addLog("❌ Conecte um dispositivo ADB antes de iniciar o mirror")
+                return@launch
+            }
+            addLog("📺 Preparando scrcpy server...")
+            val started = ScrcpyTool.startServer(context)
+            if (!started) {
+                addLog("❌ Nao foi possivel iniciar o scrcpy server remoto")
+                return@launch
+            }
+            delay(1200)
+            withContext(Dispatchers.Main) {
+                context.startActivity(Intent(context, MirrorActivity::class.java))
+            }
+            addLog("✅ Mirror iniciado")
         }
     }
 

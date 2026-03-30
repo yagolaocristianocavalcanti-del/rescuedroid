@@ -20,6 +20,7 @@ import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.util.ArrayDeque
 
 enum class AppScreen { ADB_RESCUE, LOCAL_SHELL }
 private enum class ShellTarget { LOCAL, ADB }
@@ -30,11 +31,17 @@ class MainViewModel : ViewModel() {
         const val DEFAULT_ANDROID_PATH =
             "/system/bin:/system/xbin:/product/bin:/apex/com.android.runtime/bin"
         const val LOCAL_EXIT_MARKER = "__RD_EXIT__:"
+        const val MAX_CONSOLE_LINES = 120
+        const val LOG_FLUSH_INTERVAL_MS = 120L
     }
 
     private var localShellProcess: Process? = null
     private var localShellWriter: BufferedWriter? = null
     private var localShellReaderJob: Job? = null
+    private val adbLogBuffer = ArrayDeque<String>()
+    private val localLogBuffer = ArrayDeque<String>()
+    private var adbLogFlushJob: Job? = null
+    private var localLogFlushJob: Job? = null
 
     var currentScreen by mutableStateOf(AppScreen.ADB_RESCUE)
     var isConnected by mutableStateOf(false)
@@ -49,15 +56,60 @@ class MainViewModel : ViewModel() {
     init { addLog("🚀 RescueDroid 2.0 Iniciado") }
 
     fun addLog(msg: String) {
-        viewModelScope.launch(Dispatchers.Main) {
-            msg.split("\n").filter { it.isNotBlank() }.forEach { consoleLogs.add(it) }
-        }
+        enqueueLogs(adbLogBuffer, msg)
+        ensureAdbLogFlusher()
     }
 
     fun addLocalLog(msg: String) {
-        viewModelScope.launch(Dispatchers.Main) {
-            msg.split("\n").filter { it.isNotBlank() }.forEach { localConsoleLogs.add(it) }
+        enqueueLogs(localLogBuffer, msg)
+        ensureLocalLogFlusher()
+    }
+
+    private fun enqueueLogs(buffer: ArrayDeque<String>, message: String) {
+        val lines = message
+            .split("\n")
+            .map { it.trimEnd() }
+            .filter { it.isNotBlank() }
+        if (lines.isEmpty()) return
+        synchronized(buffer) {
+            lines.forEach { buffer.addLast(it) }
         }
+    }
+
+    private fun ensureAdbLogFlusher() {
+        if (adbLogFlushJob?.isActive == true) return
+        adbLogFlushJob = viewModelScope.launch(Dispatchers.Main) {
+            while (true) {
+                flushBufferInto(consoleLogs, adbLogBuffer)
+                delay(LOG_FLUSH_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun ensureLocalLogFlusher() {
+        if (localLogFlushJob?.isActive == true) return
+        localLogFlushJob = viewModelScope.launch(Dispatchers.Main) {
+            while (true) {
+                flushBufferInto(localConsoleLogs, localLogBuffer)
+                delay(LOG_FLUSH_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun flushBufferInto(target: MutableList<String>, buffer: ArrayDeque<String>) {
+        val pending = mutableListOf<String>()
+        synchronized(buffer) {
+            while (buffer.isNotEmpty() && pending.size < 24) {
+                pending.add(buffer.removeFirst())
+            }
+        }
+        if (pending.isEmpty()) return
+
+        val overflow = (target.size + pending.size) - MAX_CONSOLE_LINES
+        if (overflow > 0) {
+            repeat(overflow.coerceAtMost(target.size)) { target.removeAt(0) }
+        }
+        target.addAll(pending)
     }
 
     fun clearLogs() { consoleLogs.clear() }
@@ -219,8 +271,15 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 addLog("📸 Tirando print remoto...")
-                AdbManager.executeCommand("screencap -p /sdcard/rescue.png")
-                addLog("✅ Salvo no dispositivo remoto: /sdcard/rescue.png")
+                val result = AdbManager.executeCommand(
+                    "screencap -p /sdcard/rescue.png >/dev/null && echo OK",
+                    timeoutMs = 2500L
+                )
+                if (result.contains("OK")) {
+                    addLog("✅ Salvo no dispositivo remoto: /sdcard/rescue.png")
+                } else {
+                    addLog("❌ Falha print: $result")
+                }
             } catch (e: Exception) { addLog("❌ Falha print") }
         }
     }
@@ -389,6 +448,8 @@ class MainViewModel : ViewModel() {
     }
 
     override fun onCleared() {
+        adbLogFlushJob?.cancel()
+        localLogFlushJob?.cancel()
         localShellReaderJob?.cancel()
         localShellWriter?.runCatching { close() }
         localShellProcess?.destroy()

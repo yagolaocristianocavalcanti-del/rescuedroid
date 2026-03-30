@@ -16,7 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -412,11 +412,18 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun TerminalConsole(logs: List<String>, modifier: Modifier = Modifier) {
         val listState = rememberLazyListState()
-        LaunchedEffect(logs.size) { if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1) }
+        LaunchedEffect(logs.size) {
+            if (logs.isNotEmpty()) {
+                listState.scrollToItem(logs.size - 1)
+            }
+        }
 
         Box(modifier = modifier.fillMaxWidth().background(Color(0xFF0D1117)).padding(8.dp)) {
-            LazyColumn(state = listState) {
-                itemsIndexed(items = logs, key = { index, item -> "${index}_${item.hashCode()}" }) { _, line ->
+            LazyColumn(
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                items(items = logs) { line ->
                     Text(
                         text = line,
                         color = when {
@@ -428,7 +435,8 @@ class MainActivity : ComponentActivity() {
                         },
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        lineHeight = 14.sp
+                        lineHeight = 14.sp,
+                        maxLines = 6
                     )
                 }
             }

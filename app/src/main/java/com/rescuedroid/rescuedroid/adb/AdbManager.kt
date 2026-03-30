@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -21,6 +22,7 @@ object AdbManager {
     private const val REMOTE_PATH = "/system/bin:/system/xbin:/product/bin:/apex/com.android.runtime/bin"
     private const val CONNECT_TIMEOUT_MS = 2500L
     private const val HANDSHAKE_TIMEOUT_MS = 4000L
+    private const val DEFAULT_COMMAND_TIMEOUT_MS = 4000L
     
     var connection: AdbConnection? = null
     private var crypto: AdbCrypto? = null
@@ -59,22 +61,29 @@ object AdbManager {
         }
     }
 
-    suspend fun executeCommand(command: String): String = withContext(Dispatchers.IO) {
+    suspend fun executeCommand(command: String, timeoutMs: Long = DEFAULT_COMMAND_TIMEOUT_MS): String = withContext(Dispatchers.IO) {
         val conn = connection ?: return@withContext "Erro: Não conectado"
         try {
             val escapedCommand = command.replace("'", "'\\''")
             val remoteCommand = "shell:sh -c 'export PATH=$REMOTE_PATH:\$PATH; $escapedCommand 2>&1'"
-            val stream: AdbStream = conn.open(remoteCommand)
             val output = StringBuilder()
-            try {
-                while (true) {
-                    val data = stream.read() ?: break
-                    output.append(String(data))
+            val completed = withTimeoutOrNull(timeoutMs) {
+                val stream: AdbStream = conn.open(remoteCommand)
+                try {
+                    while (true) {
+                        val data = stream.read() ?: break
+                        output.append(String(data))
+                    }
+                } catch (_: Exception) {
+                    // Fim da leitura
+                } finally {
+                    stream.close()
                 }
-            } catch (e: Exception) {
-                // Fim da leitura
-            } finally {
-                stream.close()
+                true
+            }
+            if (completed != true) {
+                lastErrorMessage = "Tempo limite ao executar comando ADB"
+                return@withContext "Erro: tempo limite ao executar comando"
             }
             output.toString().trim().ifEmpty { "Comando enviado." }
         } catch (e: Exception) {

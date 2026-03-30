@@ -40,6 +40,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
+    private data class ConfirmationDialogState(
+        val title: String,
+        val message: String,
+        val confirmLabel: String,
+        val onConfirm: () -> Unit
+    )
 
     private val vm: MainViewModel by viewModels()
 
@@ -105,7 +111,7 @@ class MainActivity : ComponentActivity() {
                         selected = vm.currentScreen == AppScreen.LOCAL_SHELL,
                         onClick = { vm.currentScreen = AppScreen.LOCAL_SHELL },
                         icon = { Icon(Icons.Default.Info, null) },
-                        label = { Text("Termux") }
+                        label = { Text("Shell") }
                     )
                 }
             }
@@ -122,12 +128,34 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun AdbRescueUI() {
         val context = LocalContext.current
+        var dialogState by remember { mutableStateOf<ConfirmationDialogState?>(null) }
         
         // Seletor de APK
         val apkLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.GetContent()
         ) { uri: Uri? ->
             uri?.let { vm.installSelectedApk(context, it) }
+        }
+
+        dialogState?.let { state ->
+            AlertDialog(
+                onDismissRequest = { dialogState = null },
+                title = { Text(state.title) },
+                text = { Text(state.message) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        dialogState = null
+                        state.onConfirm()
+                    }) {
+                        Text(state.confirmLabel)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { dialogState = null }) {
+                        Text("Cancelar")
+                    }
+                }
+            )
         }
 
         Column(
@@ -144,29 +172,114 @@ class MainActivity : ComponentActivity() {
             }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.connectNetwork(context) }, modifier = Modifier.weight(1f)) { Text("Conectar Wi-Fi") }
-                Button(onClick = { vm.connectUsb(context) }, modifier = Modifier.weight(1f)) { Text("USB OTG") }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Conectar por Wi-Fi",
+                            message = "Tentar conexao ADB com ${vm.adbIp}:${vm.adbPort}? O outro aparelho precisa estar com depuracao ADB ativa e autorizado.",
+                            confirmLabel = "Conectar"
+                        ) { vm.connectNetwork(context) }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Conectar Wi-Fi") }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Conectar por USB OTG",
+                            message = "Permitir que o RescueDroid tente controlar o aparelho conectado por USB OTG? Se houver popup do Android, aceite a permissao USB e a chave ADB no outro aparelho.",
+                            confirmLabel = "Permitir"
+                        ) { vm.connectUsb(context) }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("USB OTG") }
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = Color.DarkGray)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.blindUnlock() }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))) { Text("🔓 Unlock") }
-                Button(onClick = { vm.takeScreenshot() }, modifier = Modifier.weight(1f)) { Text("📸 Print") }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Enviar unlock",
+                            message = "Enviar a sequencia de desbloqueio cego para o aparelho remoto?",
+                            confirmLabel = "Enviar"
+                        ) { vm.blindUnlock() }
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2))
+                ) { Text("🔓 Unlock") }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Capturar print remoto",
+                            message = "Executar screencap no aparelho remoto e salvar em /sdcard/rescue.png?",
+                            confirmLabel = "Capturar"
+                        ) { vm.takeScreenshot() }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("📸 Print") }
             }
 
             Text("Acessibilidade", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.enableFullAccessibility() }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF388E3C))) { Text("Ativar Full", fontSize = 12.sp) }
-                Button(onClick = { vm.disableTalkBack() }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))) { Text("Desativar", fontSize = 12.sp) }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Ativar acessibilidade",
+                            message = "Aplicar comandos ADB para alterar configuracoes de acessibilidade e timeout de tela no aparelho remoto?",
+                            confirmLabel = "Ativar"
+                        ) { vm.enableFullAccessibility() }
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF388E3C))
+                ) { Text("Ativar Full", fontSize = 12.sp) }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Desativar acessibilidade",
+                            message = "Desativar a acessibilidade do aparelho remoto via ADB?",
+                            confirmLabel = "Desativar"
+                        ) { vm.disableTalkBack() }
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                ) { Text("Desativar", fontSize = 12.sp) }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.deviceDiagnostics() }, modifier = Modifier.weight(1f)) { Text("Diagnóstico", fontSize = 10.sp) }
-                Button(onClick = { apkLauncher.launch("application/vnd.android.package-archive") }, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF673AB7))) { 
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Diagnostico do aparelho",
+                            message = "Consultar modelo e versao Android do aparelho remoto via ADB?",
+                            confirmLabel = "Consultar"
+                        ) { vm.deviceDiagnostics() }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("Diagnóstico", fontSize = 10.sp) }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Instalar APK remoto",
+                            message = "Escolher um APK e enviar para instalacao no aparelho remoto conectado por ADB?",
+                            confirmLabel = "Escolher APK"
+                        ) { apkLauncher.launch("application/vnd.android.package-archive") }
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF673AB7))
+                ) { 
                     Text("Instalar APK", fontSize = 10.sp) 
                 }
-                Button(onClick = { vm.startMirror() }, modifier = Modifier.weight(1f)) { Text("📺 Mirror", fontSize = 10.sp) }
+                Button(
+                    onClick = {
+                        dialogState = ConfirmationDialogState(
+                            title = "Iniciar mirror",
+                            message = "Enviar o comando de inicializacao do scrcpy-server no aparelho remoto?",
+                            confirmLabel = "Iniciar"
+                        ) { vm.startMirror() }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("📺 Mirror", fontSize = 10.sp) }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -175,6 +288,21 @@ class MainActivity : ComponentActivity() {
             }
             
             TerminalConsole(vm.consoleLogs, modifier = Modifier.height(300.dp))
+
+            OutlinedTextField(
+                value = vm.shellCommand,
+                onValueChange = { vm.shellCommand = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("comando ADB remoto", color = Color.Gray) },
+                textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { vm.runAdbCommand() }),
+                trailingIcon = {
+                    IconButton(onClick = { vm.runAdbCommand() }) {
+                        Icon(Icons.AutoMirrored.Filled.Send, null, tint = Color(0xFF58A6FF))
+                    }
+                }
+            )
             
             TermuxKeyRow(onKeyClick = { key -> vm.shellCommand += "$key" }, onRun = { vm.runAdbCommand() })
         }
@@ -183,19 +311,31 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun TermuxShellUI() {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Text("Shell Termux Local", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF4CAF50))
+            Text("Shell Local Android", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF4CAF50))
             
             Spacer(modifier = Modifier.height(8.dp))
-            
-            Button(
-                onClick = { vm.requestRoot() },
+
+            Surface(
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = if(vm.hasRoot) Color(0xFF2E7D32) else Color(0xFFC62828))
+                color = Color(0xFF1B5E20),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                Text(if(vm.hasRoot) "ROOT CONCEDIDO" else "SOLICITAR ROOT (su)")
+                Text(
+                    text = "Shell local sem root (nao e Termux)",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Console local", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                IconButton(onClick = { vm.clearLocalLogs() }) {
+                    Icon(Icons.Default.Delete, "Limpar console local", tint = Color.Gray)
+                }
+            }
 
             TerminalConsole(vm.localConsoleLogs, modifier = Modifier.weight(1f))
 

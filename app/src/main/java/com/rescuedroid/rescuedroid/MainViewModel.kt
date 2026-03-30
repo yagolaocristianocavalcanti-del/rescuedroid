@@ -13,19 +13,31 @@ import com.rescuedroid.rescuedroid.adb.AdbManager
 import com.rescuedroid.rescuedroid.adb.UsbAdbConnector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
+import java.io.BufferedWriter
 import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 
 enum class AppScreen { ADB_RESCUE, LOCAL_SHELL }
+private enum class ShellTarget { LOCAL, ADB }
 
 class MainViewModel : ViewModel() {
+    private companion object {
+        const val ANDROID_SHELL = "/system/bin/sh"
+        const val DEFAULT_ANDROID_PATH =
+            "/system/bin:/system/xbin:/product/bin:/apex/com.android.runtime/bin"
+        const val LOCAL_EXIT_MARKER = "__RD_EXIT__:"
+    }
+
+    private var localShellProcess: Process? = null
+    private var localShellWriter: BufferedWriter? = null
+    private var localShellReaderJob: Job? = null
 
     var currentScreen by mutableStateOf(AppScreen.ADB_RESCUE)
     var isConnected by mutableStateOf(false)
-    var hasRoot by mutableStateOf(false)
-    
     var adbIp by mutableStateOf("192.168.1.100")
     var adbPort by mutableStateOf("5555")
     var shellCommand by mutableStateOf("ls /sdcard")
@@ -50,6 +62,109 @@ class MainViewModel : ViewModel() {
 
     fun clearLogs() { consoleLogs.clear() }
 
+    fun clearLocalLogs() { localConsoleLogs.clear() }
+
+    private fun explainUsbFailure(raw: String): String {
+        val reason = raw.trim()
+        return when {
+            reason.contains("Permissao USB negada", ignoreCase = true) ->
+                "permissao USB negada"
+            reason.contains("Nenhuma interface ADB encontrada", ignoreCase = true) ->
+                "sem interface ADB no dispositivo conectado"
+            reason.contains("Tempo limite no handshake USB ADB", ignoreCase = true) ->
+                "depuracao USB provavelmente desativada ou a chave ADB nao foi aceita no outro aparelho"
+            reason.contains("Nao foi possivel carregar ou gerar a chave ADB", ignoreCase = true) ->
+                "nao foi possivel preparar a chave ADB deste app"
+            reason.isBlank() ->
+                "ative a depuracao USB e aceite a chave ADB no outro aparelho"
+            else -> reason
+        }
+    }
+
+    private fun explainWifiFailure(raw: String): String {
+        val reason = raw.trim()
+        return when {
+            reason.contains("Connection refused", ignoreCase = true) ->
+                "conexao recusada; verifique IP, porta e se o ADB por rede esta ativo"
+            reason.contains("timeout", ignoreCase = true) ->
+                "tempo limite; o aparelho remoto nao respondeu ao handshake ADB"
+            reason.contains("Nao foi possivel carregar ou gerar a chave ADB", ignoreCase = true) ->
+                "nao foi possivel preparar a chave ADB deste app"
+            reason.isBlank() ->
+                "verifique IP, porta e autorizacao ADB"
+            else -> reason
+        }
+    }
+
+    private fun addShellLog(target: ShellTarget, message: String) {
+        when (target) {
+            ShellTarget.LOCAL -> addLocalLog(message)
+            ShellTarget.ADB -> addLog(message)
+        }
+    }
+
+    private fun normalizeCommand(rawCommand: String, target: ShellTarget): String? {
+        val cmd = rawCommand.trim()
+        if (cmd.isBlank()) return null
+
+        if (target == ShellTarget.LOCAL) {
+            when {
+                cmd == "pkg" || cmd.startsWith("pkg ") || cmd == "apt" || cmd.startsWith("apt ") -> {
+                    addShellLog(target, "❌ 'pkg' e 'apt' sao comandos do Termux, nao do shell padrao do Android")
+                    addShellLog(target, "💡 Use o app Termux para instalar pacotes, ou rode comandos nativos como ls, getprop, id")
+                    return null
+                }
+                cmd == "tcpip" || cmd.startsWith("tcpip ") -> {
+                    addShellLog(target, "❌ 'tcpip' sozinho nao e um comando do shell do Android")
+                    addShellLog(target, "💡 Para ADB por rede, use a area de resgate/ADB com o dispositivo ja conectado")
+                    return null
+                }
+            }
+        }
+
+        if (target == ShellTarget.ADB) {
+            when {
+                cmd == "adb" || cmd.startsWith("adb ") -> {
+                    addShellLog(target, "❌ Este console ADB executa shell remoto, nao comandos do cliente 'adb' do PC")
+                    addShellLog(target, "💡 Use comandos do Android remoto como getprop, pm, settings, ls, screencap")
+                    return null
+                }
+                cmd == "connect" || cmd.startsWith("connect ") -> {
+                    addShellLog(target, "💡 A conexao ADB e feita pelos botoes 'Conectar Wi-Fi' e 'USB OTG'")
+                    return null
+                }
+            }
+        }
+
+        val pingCorrection = autocorrectPing(cmd)
+        if (pingCorrection != null) {
+            addShellLog(target, "🛠 Corrigido automaticamente: $pingCorrection")
+            return pingCorrection
+        }
+
+        if (cmd.startsWith("ping ") && !cmd.contains(" -c ") && !cmd.startsWith("ping -c ")) {
+            addShellLog(target, "⚠ 'ping' pode parecer travado sem limite de pacotes")
+            addShellLog(target, "💡 Tente: ping -c 4 ${cmd.removePrefix("ping ").trim()}")
+        }
+
+        return cmd
+    }
+
+    private fun autocorrectPing(command: String): String? {
+        val parts = command.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (parts.isEmpty() || parts.first() != "ping") return null
+
+        if (parts.size == 3 && parts[1] == "-c" && parts[2].contains(".")) {
+            return "ping -c 4 ${parts[2]}"
+        }
+
+        if (parts.size >= 4 && parts[1].contains(".") && parts[2] == "-c") {
+            return "ping -c 4 ${parts[1]}"
+        }
+
+        return null
+    }
+
     fun connectNetwork(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             addLog("⏳ Conectando em $adbIp:$adbPort...")
@@ -58,7 +173,7 @@ class MainViewModel : ViewModel() {
                 withContext(Dispatchers.Main) {
                     isConnected = success
                     if (success) addLog("✅ Wi-Fi Conectado ao REMOTO")
-                    else addLog("❌ Falha na conexão Wi-Fi")
+                    else addLog("❌ Falha na conexão Wi-Fi: ${explainWifiFailure(AdbManager.lastErrorMessage)}")
                 }
             } catch (e: Exception) { addLog("❌ Erro: ${e.message}") }
         }
@@ -78,7 +193,7 @@ class MainViewModel : ViewModel() {
                 withContext(Dispatchers.Main) {
                     isConnected = success
                     if (success) addLog("✅ OTG Conectado ao REMOTO")
-                    else addLog("❌ Falha handshake USB")
+                    else addLog("❌ Falha USB: ${explainUsbFailure(UsbAdbConnector.lastErrorMessage)}")
                 }
             } catch (e: Exception) { addLog("❌ Erro USB: ${e.message}") }
         }
@@ -188,9 +303,13 @@ class MainViewModel : ViewModel() {
     }
 
     fun runAdbCommand() {
-        val cmd = shellCommand
+        val cmd = normalizeCommand(shellCommand, ShellTarget.ADB) ?: return
         if (cmd.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
+            if (!isConnected) {
+                addLog("❌ Conecte um dispositivo ADB antes de enviar comandos")
+                return@launch
+            }
             addLog("> $cmd")
             val res = AdbManager.executeCommand(cmd)
             addLog(res)
@@ -205,29 +324,74 @@ class MainViewModel : ViewModel() {
     }
 
     // --- Shell Local ---
-    fun requestRoot() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-                val output = BufferedReader(InputStreamReader(process.inputStream)).readLine() ?: ""
-                withContext(Dispatchers.Main) {
-                    hasRoot = output.contains("uid=0")
-                    addLocalLog(if (hasRoot) "✅ Root concedido" else "❌ Root negado")
+    private fun ensureLocalShellSession() {
+        if (localShellProcess?.isAlive == true && localShellWriter != null) return
+
+        try {
+            val process = ProcessBuilder(ANDROID_SHELL)
+                .redirectErrorStream(true)
+                .apply {
+                    environment()["PATH"] = DEFAULT_ANDROID_PATH
                 }
-            } catch (e: Exception) { addLocalLog("❌ Erro Root") }
+                .start()
+
+            localShellProcess = process
+            localShellWriter = BufferedWriter(OutputStreamWriter(process.outputStream))
+            localShellReaderJob?.cancel()
+            localShellReaderJob = viewModelScope.launch(Dispatchers.IO) {
+                BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        when {
+                            line.startsWith(LOCAL_EXIT_MARKER) -> {
+                                val exitCode = line.removePrefix(LOCAL_EXIT_MARKER).toIntOrNull()
+                                when (exitCode) {
+                                    0 -> addLocalLog("✅ Comando finalizado")
+                                    127 -> addLocalLog("❌ Codigo 127: comando nao encontrado neste Android")
+                                    null -> addLocalLog("⚠ Saida de status invalida do shell")
+                                    else -> addLocalLog("❌ Comando finalizado com codigo $exitCode")
+                                }
+                            }
+                            line.isNotBlank() -> addLocalLog(line)
+                        }
+                    }
+                }
+                addLocalLog("⚠ Sessao do shell local foi encerrada")
+                localShellWriter = null
+                localShellProcess = null
+            }
+
+            addLocalLog("✅ Sessao do shell local iniciada")
+        } catch (e: Exception) {
+            addLocalLog("❌ Nao foi possivel iniciar o shell local: ${e.message ?: "erro desconhecido"}")
         }
     }
 
     fun runLocalShell() {
-        val cmd = localShellCommand
+        val cmd = normalizeCommand(localShellCommand, ShellTarget.LOCAL) ?: return
         if (cmd.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             addLocalLog("$ $cmd")
             try {
-                val shell = if (hasRoot) "su" else "sh"
-                val process = Runtime.getRuntime().exec(arrayOf(shell, "-c", cmd))
-                BufferedReader(InputStreamReader(process.inputStream)).forEachLine { addLocalLog(it) }
-            } catch (e: Exception) { addLocalLog("❌ Erro local") }
+                ensureLocalShellSession()
+                val writer = localShellWriter
+                if (writer == null) {
+                    addLocalLog("❌ Sessao local indisponivel")
+                    return@launch
+                }
+                writer.write("$cmd\n")
+                writer.write("printf '$LOCAL_EXIT_MARKER%s\\n' \"$?\"\n")
+                writer.flush()
+            } catch (e: Exception) {
+                addLocalLog("❌ Erro local: ${e.message ?: "falha ao executar comando"}")
+            }
         }
+    }
+
+    override fun onCleared() {
+        localShellReaderJob?.cancel()
+        localShellWriter?.runCatching { close() }
+        localShellProcess?.destroy()
+        super.onCleared()
     }
 }

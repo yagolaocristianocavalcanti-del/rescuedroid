@@ -9,7 +9,7 @@ import kotlinx.coroutines.delay
 object LogcatTool {
     fun start(scope: CoroutineScope, callback: (String) -> Unit) {
         scope.launch(Dispatchers.IO) {
-            val conn = AdbManager.connection ?: return@launch
+            val conn = AdbManager.activeConnection ?: return@launch
             try {
                 val stream = conn.open("shell:logcat")
                 while (!stream.isClosed) {

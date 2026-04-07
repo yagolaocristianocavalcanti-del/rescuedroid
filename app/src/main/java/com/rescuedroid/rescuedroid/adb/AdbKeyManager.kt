@@ -34,6 +34,18 @@ class AdbKeyManager(context: Context) {
         }
     }
 
+    fun forceRegenerateCrypto(): AdbCrypto? {
+        return try {
+            privateKeyFile.delete()
+            publicKeyFile.delete()
+            generateAndSaveKeys()
+            AdbCrypto.loadAdbCrypto(adbBase64, privateKeyFile, publicKeyFile)
+        } catch (e: Exception) {
+            Log.e("AdbKeyManager", "Erro ao regenerar chaves ADB: ${e.message}", e)
+            null
+        }
+    }
+
     private fun generateAndSaveKeys() {
         try {
             Log.d("AdbKeyManager", "Gerando novo par de chaves compatível com ADB...")

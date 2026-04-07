@@ -1,10 +1,20 @@
 package com.rescuedroid.rescuedroid.adb
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-object AdbShell {
-    suspend fun run(cmd: String): String = withContext(Dispatchers.IO) {
-        AdbManager.executeCommand(cmd)
+@Singleton
+class AdbShell @Inject constructor(
+    private val adbRepository: AdbRepository
+) {
+    suspend fun run(cmd: String, serial: String? = null): String {
+        return adbRepository.execute(cmd, serial = serial)
+    }
+
+    /**
+     * Tenta executar o comando no dispositivo específico.
+     */
+    suspend fun runForDevice(serial: String, cmd: String): String {
+        return adbRepository.execute(cmd, serial = serial)
     }
 }

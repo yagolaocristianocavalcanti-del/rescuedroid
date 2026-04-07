@@ -10,7 +10,8 @@ public class AdbConnection implements Closeable {
     private AdbChannel channel;
     private AdbCrypto crypto;
     private volatile boolean connected = false;
-    private int maxData = 16384;
+    private int connectVersion;
+    private int maxData;
     private int lastLocalId = 0;
     private ConcurrentHashMap<Integer, AdbStream> streams = new ConcurrentHashMap<>();
     private volatile boolean closed = false;
@@ -18,23 +19,35 @@ public class AdbConnection implements Closeable {
     private boolean sentSignature = false;
 
     public AdbConnection(AdbChannel channel, AdbCrypto crypto) {
+        this(channel, crypto, AdbProtocol.CONNECT_VERSION, 16384);
+    }
+
+    public AdbConnection(AdbChannel channel, AdbCrypto crypto, int connectVersion, int maxData) {
         this.channel = channel;
         this.crypto = crypto;
+        this.connectVersion = connectVersion;
+        this.maxData = maxData;
     }
 
     public static AdbConnection create(AdbChannel channel, AdbCrypto crypto) {
         return new AdbConnection(channel, crypto);
     }
 
+    public static AdbConnection create(AdbChannel channel, AdbCrypto crypto, int connectVersion, int maxData) {
+        return new AdbConnection(channel, crypto, connectVersion, maxData);
+    }
+
     public void connect() throws IOException {
+        connect(20000);
+    }
+
+    public void connect(long timeoutMs) throws IOException {
         closed = false;
         connected = false;
         sentSignature = false;
 
-        // Envia pacote inicial de conexão (CONNECT)
-        writePacket(AdbProtocol.CMD_CNXN, AdbProtocol.CONNECT_VERSION, maxData, "host::\0".getBytes());
-
-        // Inicia a Thread de escuta do dispositivo remoto
+        // Inicia a Thread de escuta do dispositivo remoto ANTES de enviar o CONNECT
+        // para garantir que não perderemos a resposta rápida.
         Thread t = new Thread(() -> {
             try {
                 while (!closed) {
@@ -43,22 +56,30 @@ public class AdbConnection implements Closeable {
                     handlePacket(p);
                 }
             } catch (Exception e) {
-                notifyConnectResult(false);
+                if (!closed) {
+                    notifyConnectResult(false);
+                }
             }
         });
         t.setName("AdbReceiverThread");
         t.start();
 
+        // Envia pacote inicial de conexão (CONNECT)
+        writePacket(AdbProtocol.CMD_CNXN, connectVersion, maxData, "host::\0".getBytes());
+
         // Aguarda a autorização RSA no outro celular (handshake)
         synchronized (connectLock) {
             try {
-                if (!connected) connectLock.wait(20000); 
+                if (!connected) connectLock.wait(timeoutMs); 
             } catch (InterruptedException e) {
                 throw new IOException("Conexão interrompida");
             }
         }
 
-        if (!connected) throw new IOException("Falha no Handshake ADB. Verifique o pop-up no outro celular.");
+        if (!connected) {
+            close(); // Fecha o canal e para a thread se falhou
+            throw new IOException("Falha no Handshake ADB. Verifique o pop-up no outro celular.");
+        }
     }
 
     private void notifyConnectResult(boolean success) {
@@ -172,6 +193,10 @@ public class AdbConnection implements Closeable {
     @Override public void close() throws IOException {
         closed = true;
         channel.close();
+    }
+
+    public boolean isClosed() {
+        return closed;
     }
 
     private static class AdbPacket {

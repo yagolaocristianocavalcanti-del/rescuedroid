@@ -15,8 +15,8 @@ android {
         applicationId = "com.rescuedroid.rescuedroid"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0-BETA"
+        versionCode = 3
+        versionName = "2.1-LUXO"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

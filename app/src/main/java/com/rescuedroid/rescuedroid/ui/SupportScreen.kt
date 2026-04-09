@@ -77,6 +77,7 @@ fun SupportScreen(vm: MainViewModel) {
                 item { QuickCmdChip("📸 Screenshot") { vm.processarComandoIA("screenshot") } }
                 item { QuickCmdChip("🧹 Limpar Lixo") { vm.processarComandoIA("limpa lixo") } }
                 item { QuickCmdChip("🔓 Desbloquear") { vm.processarComandoIA("desbloquear") } }
+                item { QuickCmdChip("👴 Modo Idoso") { vm.processarComandoIA("modo idoso") } }
             }
 
             Spacer(modifier = Modifier.height(8.dp))

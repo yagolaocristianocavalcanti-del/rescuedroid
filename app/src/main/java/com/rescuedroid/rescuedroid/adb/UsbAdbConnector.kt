@@ -22,9 +22,7 @@ object UsbAdbConnector {
     enum class ProgressEvent {
         REQUESTING_PERMISSION,
         PERMISSION_GRANTED,
-        WAITING_DEVICE_SETTLE,
         DEVICE_READY,
-        SAYING_HELLO,
         HANDSHAKE_START
     }
 
@@ -34,8 +32,6 @@ object UsbAdbConnector {
         val handshakeTimeoutMs: Long,
         val retryDelayMs: Long,
         val permissionTimeoutMs: Long,
-        val reenumerationTimeoutMs: Long,
-        val rotateKeyOnRetry: Boolean,
         val connectVersion: Int,
         val connectMaxData: Int
     ) {
@@ -45,8 +41,6 @@ object UsbAdbConnector {
             handshakeTimeoutMs = 30000L,
             retryDelayMs = 2000L,
             permissionTimeoutMs = 15000L,
-            reenumerationTimeoutMs = 5000L,
-            rotateKeyOnRetry = false,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = 16384
         ),
@@ -56,8 +50,6 @@ object UsbAdbConnector {
             handshakeTimeoutMs = 45000L,
             retryDelayMs = 3000L,
             permissionTimeoutMs = 20000L,
-            reenumerationTimeoutMs = 8000L,
-            rotateKeyOnRetry = false,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = 16384
         ),
@@ -67,8 +59,6 @@ object UsbAdbConnector {
             handshakeTimeoutMs = 60000L,
             retryDelayMs = 4000L,
             permissionTimeoutMs = 30000L,
-            reenumerationTimeoutMs = 12000L,
-            rotateKeyOnRetry = true,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = 16384
         ),
@@ -78,8 +68,6 @@ object UsbAdbConnector {
             handshakeTimeoutMs = 60000L,
             retryDelayMs = 4000L,
             permissionTimeoutMs = 30000L,
-            reenumerationTimeoutMs = 15000L,
-            rotateKeyOnRetry = true,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = AdbProtocol.CONNECT_MAXDATA
         )
@@ -111,11 +99,24 @@ object UsbAdbConnector {
     ): Boolean = withContext(Dispatchers.IO) {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         lastErrorMessage = ""
-        lastAttemptMode = mode
+        
+        // DETECTAR USB
+        val usbInfo = UsbDetector.analyze(device)
+        Log.i(TAG, usbInfo.toReadableString())
+        
+        // AUTO-SELECIONAR MODO SE USAR DEFAULT
+        val selectedMode = if (mode == ConnectMode.NORMAL) {
+            UsbDetector.speedToConnectMode(usbInfo.speed)
+        } else {
+            mode
+        }
+        
+        Log.i(TAG, "🎯 Modo selecionado: ${selectedMode.label} (original: ${mode.label})")
+        lastAttemptMode = selectedMode
 
         if (!usbManager.hasPermission(device)) {
             onProgress?.invoke(ProgressEvent.REQUESTING_PERMISSION)
-            val permissionResult = requestPermission(context, usbManager, device, mode.permissionTimeoutMs)
+            val permissionResult = requestPermission(context, usbManager, device, selectedMode.permissionTimeoutMs)
             if (permissionResult != UsbPermissionResult.GRANTED) {
                 lastErrorMessage = when (permissionResult) {
                     UsbPermissionResult.DENIED -> "Permissão USB negada"
@@ -137,7 +138,7 @@ object UsbAdbConnector {
         val keyManager = AdbKeyManager(context)
         var crypto = keyManager.getOrCreateCrypto() ?: return@withContext false
 
-        repeat(mode.handshakeAttempts) { index ->
+        repeat(selectedMode.handshakeAttempts) { index ->
             val attempt = index + 1
             val usbConnection = usbManager.openDevice(device) ?: return@repeat
             
@@ -147,12 +148,22 @@ object UsbAdbConnector {
                     val epIn = (0 until iface.endpointCount).map { iface.getEndpoint(it) }.first { it.direction == UsbConstants.USB_DIR_IN }
                     val epOut = (0 until iface.endpointCount).map { iface.getEndpoint(it) }.first { it.direction == UsbConstants.USB_DIR_OUT }
 
-                    val channel = UsbChannel(usbConnection, epIn, epOut)
-                    val adbConn = AdbConnection.create(channel, crypto, mode.connectVersion, mode.connectMaxData)
+                    // Usando a informação já detectada pelo UsbDetector no início da função
+                    Log.d(TAG, "🔌 Velocidade USB Detectada: ${usbInfo.speed.name} (${usbInfo.speed.bandwidth / 1000.0} Mbps)")
+
+                    if (usbInfo.speed == UsbDetector.UsbSpeed.USB_1_1) {
+                        Log.w(TAG, "⚠️ Hardware instável (USB 1.1) - Aplicando mitigação no canal")
+                    }
+
+                    val isLegacyDevice = selectedMode == ConnectMode.LEGACY
+                    Log.d(TAG, if (isLegacyDevice) "📱 Modo Legado (Adblib v1) ativado" else "📱 Modo Moderno (Adblib v2) ativado")
+
+                    val channel = UsbChannel(usbConnection, epIn, epOut, isLegacyDevice)
+                    val adbConn = AdbConnection.create(channel, crypto, selectedMode.connectVersion, selectedMode.connectMaxData)
                     
                     onProgress?.invoke(ProgressEvent.HANDSHAKE_START)
                     try {
-                        adbConn.connect(mode.handshakeTimeoutMs)
+                        adbConn.connect(selectedMode.handshakeTimeoutMs)
                         AdbManager.setUsbConnection(adbConn)
                         adbConnCreated = true
                         return@withContext true
@@ -171,7 +182,7 @@ object UsbAdbConnector {
                     try { usbConnection.close() } catch (e: Exception) {}
                 }
             }
-            delay(mode.retryDelayMs)
+            delay(selectedMode.retryDelayMs)
         }
         false
     }

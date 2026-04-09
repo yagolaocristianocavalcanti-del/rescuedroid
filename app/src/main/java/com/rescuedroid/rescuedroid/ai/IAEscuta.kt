@@ -6,16 +6,16 @@ object IAEscuta {
         
         return when {
             // CONEXÕES
-            cmd.contains("conecta usb") || cmd.contains("usb turbo") -> IACmd.UsbTurbo
+            cmd.contains("conecta usb") || cmd.contains("usb turbo") || cmd.contains("martelo") -> IACmd.UsbTurbo
             cmd.contains("wifi") || cmd.contains("conecta rede") || cmd.contains("conectar wifi") -> IACmd.ConnectWifi
             cmd.contains("ip") -> IACmd.SetIp(cmd.extractIp())
             
-            // DEBLOAT
-            cmd.contains("remove") || cmd.contains("tira lixo") || cmd.contains("debloat") -> {
-                val pkg = if (cmd.contains("facebook")) "facebook" else ""
+            // DEBLOAT COM REGEX (Sugestão Colega)
+            cmd.contains("remove") || cmd.contains("tira") || cmd.contains("debloat") || cmd.contains("apaga") -> {
+                val pkg = extractPackageName(cmd)
                 if (pkg.isNotEmpty()) IACmd.Debloat(pkg) else IACmd.DebloatAllSafe
             }
-            cmd.contains("limpa tudo") -> IACmd.DebloatAllSafe
+            cmd.contains("limpa tudo") || cmd.contains("limpa lixo") -> IACmd.DebloatAllSafe
             
             // PERMISSÕES
             cmd.contains("permissão") || cmd.contains("storage") || cmd.contains("armazenamento") -> IACmd.RequestStorage
@@ -24,6 +24,7 @@ object IAEscuta {
             cmd.contains("screenshot") || cmd.contains("print") -> IACmd.Screenshot
             cmd.contains("desbloqueia") || cmd.contains("desbloquear") -> IACmd.Unlock
             cmd.contains("tela ligada") || cmd.contains("sempre on") -> IACmd.ScreenTimeout
+            cmd.contains("idoso") || cmd.contains("modo idoso") || cmd.contains("fácil") -> IACmd.SeniorMode
             
             // HACKER
             cmd.contains("hacker") || cmd.contains("modo hacker") -> IACmd.ToggleHacker
@@ -35,6 +36,12 @@ object IAEscuta {
         }
     }
     
+    private fun extractPackageName(cmd: String): String {
+        // Tenta encontrar o pacote após palavras de comando
+        val pkgRegex = Regex("""(?:remove|tira|app|debloat|pacote|apaga)\s+([a-z0-9.]+)""")
+        return pkgRegex.find(cmd)?.groupValues?.get(1) ?: ""
+    }
+
     private fun String.extractIp(): String {
         val ipRegex = Regex("""(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})""")
         return ipRegex.find(this)?.value ?: ""
@@ -51,6 +58,7 @@ sealed class IACmd {
     object Screenshot : IACmd()
     object Unlock : IACmd()
     object ScreenTimeout : IACmd()
+    object SeniorMode : IACmd()
     object ToggleHacker : IACmd()
     object ResetAdbKeys : IACmd()
 }

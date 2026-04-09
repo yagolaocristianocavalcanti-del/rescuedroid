@@ -118,10 +118,7 @@ class MirrorActivity : ComponentActivity() {
         var startTime = 0L
 
         surfaceView.setOnTouchListener { v, event ->
-            // Busca o serial real da conexão ativa
             val serial = scrcpyTool.activeConnection?.toString() ?: "device"
-
-            // Mapeamento de coordenadas (View -> Device)
             val scaleX = deviceWidth.toFloat() / v.width
             val scaleY = deviceHeight.toFloat() / v.height
             
@@ -140,10 +137,8 @@ class MirrorActivity : ComponentActivity() {
                     val dist = Math.hypot((event.x - startX).toDouble(), (event.y - startY).toDouble())
                     
                     if (dist < 20 && duration < 200) {
-                        // Foi um Tap
                         remoteControl.tap(serial, x, y)
                     } else if (dist > 50) {
-                        // Foi um Swipe
                         val x1 = (startX * scaleX).toInt()
                         val y1 = (startY * scaleY).toInt()
                         remoteControl.swipe(serial, x1, y1, x, y, duration.toInt())
@@ -190,110 +185,117 @@ class MirrorActivity : ComponentActivity() {
     private fun iniciarDecoder(surface: Surface) {
         job?.cancel()
         job = scope.launch(Dispatchers.IO) {
-            val conn = scrcpyTool.activeConnection ?: AdbManager.activeConnection ?: return@launch
             var stream: AdbStream? = null
             var decoder: MediaCodec? = null
-
+            
             try {
-                // 1. Resolução Real
-                val wmSize = AdbManager.executeCommand("wm size", target = conn)
-                val match = Regex("""(\d+)x(\d+)""").find(wmSize)
-                deviceWidth = match?.groupValues?.get(1)?.toIntOrNull() ?: DEFAULT_WIDTH
-                deviceHeight = match?.groupValues?.get(2)?.toIntOrNull() ?: DEFAULT_HEIGHT
-
-                // 2. Conexão com Retry
-                var retry = 0
-                while (retry < 5 && (stream == null || stream.isClosed)) {
-                    try {
-                        stream = conn.open("localabstract:scrcpy")
-                    } catch (e: Exception) {
-                        retry++; delay(500)
-                    }
-                }
-                
-                val activeStream = stream ?: return@launch
-
-                // 3. PULAR HEADER DO SCRCPY (Essencial!)
-                val header = ByteArray(12)
-                var headerRead = 0
-                while (headerRead < 12 && !activeStream.isClosed) {
-                    val chunk = activeStream.read() ?: break
-                    val toCopy = minOf(chunk.size, 12 - headerRead)
-                    System.arraycopy(chunk, 0, header, headerRead, toCopy)
-                    headerRead += toCopy
-                }
-                Log.d(TAG, "Header scrcpy descartado")
-
-                // 4. Configurar Decoder
-                val mimeType = when(currentCodec) {
-                    "h265" -> "video/hevc"
-                    "av1" -> "video/av01"
-                    else -> "video/avc"
-                }
-                
-                decoder = MediaCodec.createDecoderByType(mimeType).apply {
-                    val format = MediaFormat.createVideoFormat(mimeType, deviceWidth, deviceHeight)
-                    if (android.os.Build.VERSION.SDK_INT >= 30) {
-                        format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-                    }
-                    format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
-                    format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 0)
-                    configure(format, surface, null, 0)
-                    start()
-                }
-
-                val info = MediaCodec.BufferInfo()
-                var frames = 0
-                var lastUpdate = System.currentTimeMillis()
-                val packetBuffer = ByteArray(1024 * 1024)
-                var packetSize = 0
-                val bitrate = "${scrcpyTool.currentQuality.bitRate / 1_000_000}Mbps"
-
-                while (isActive && !activeStream.isClosed) {
-                    val data = try { activeStream.read() } catch (e: Exception) { null } ?: break
+                withTimeout(300_000L) { // Timeout global 5min
+                    val conn = scrcpyTool.activeConnection ?: AdbManager.activeConnection ?: return@withTimeout
                     
-                    if (packetSize + data.size <= packetBuffer.size) {
-                        System.arraycopy(data, 0, packetBuffer, packetSize, data.size)
-                        packetSize += data.size
-                    }
+                    // 1. Resolução Real
+                    val wmSize = AdbManager.executeCommand("wm size", target = conn)
+                    val match = Regex("""(\d+)x(\d+)""").find(wmSize)
+                    deviceWidth = match?.groupValues?.get(1)?.toIntOrNull() ?: DEFAULT_WIDTH
+                    deviceHeight = match?.groupValues?.get(2)?.toIntOrNull() ?: DEFAULT_HEIGHT
 
-                    if (packetSize < 5) continue // Ignora fragmentos minúsculos
-
-                    val inputIndex = decoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
-                    if (inputIndex >= 0) {
-                        decoder.getInputBuffer(inputIndex)?.apply {
-                            clear(); put(packetBuffer, 0, packetSize)
-                            decoder.queueInputBuffer(inputIndex, 0, packetSize, System.nanoTime()/1000, 0)
+                    // 2. Conexão Temporal
+                    val maxRetryTime = 5000L
+                    val startTimeMs = System.currentTimeMillis()
+                    while (System.currentTimeMillis() - startTimeMs < maxRetryTime && stream == null) {
+                        try {
+                            stream = conn.open("localabstract:scrcpy")
+                        } catch (e: Exception) {
+                            delay(500)
                         }
-                        packetSize = 0
+                    }
+                    
+                    val activeStream = stream ?: run {
+                        Log.e(TAG, "Timeout Scrcpy")
+                        return@withTimeout
                     }
 
-                    var outIndex = decoder.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US)
-                    while (outIndex >= 0) {
-                        decoder.releaseOutputBuffer(outIndex, true)
-                        frames++
-                        outIndex = decoder.dequeueOutputBuffer(info, 0)
+                    // 3. Header
+                    val header = ByteArray(12)
+                    var headerRead = 0
+                    while (headerRead < 12 && !activeStream.isClosed) {
+                        val chunk = activeStream.read() ?: break
+                        val toCopy = minOf(chunk.size, 12 - headerRead)
+                        System.arraycopy(chunk, 0, header, headerRead, toCopy)
+                        headerRead += toCopy
                     }
 
-                    val now = System.currentTimeMillis()
-                    if (now - lastUpdate >= 1000) {
-                        val fps = frames
-                        frames = 0; lastUpdate = now
-                        runOnUiThread {
-                            codecIndicator.text = "${currentCodec.uppercase()} | $fps FPS | $bitrate"
-                            codecIndicator.setTextColor(when(currentCodec){
-                                "h265" -> android.graphics.Color.GREEN
-                                "h264" -> android.graphics.Color.CYAN
-                                else -> android.graphics.Color.MAGENTA
-                            })
+                    // 4. Configurar Decoder
+                    val mimeType = when(currentCodec) {
+                        "h265" -> "video/hevc"
+                        "av1" -> "video/av01"
+                        else -> "video/avc"
+                    }
+                    
+                    val currentDecoder = MediaCodec.createDecoderByType(mimeType).apply {
+                        val format = MediaFormat.createVideoFormat(mimeType, deviceWidth, deviceHeight)
+                        if (android.os.Build.VERSION.SDK_INT >= 30) {
+                            format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                        }
+                        format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+                        format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 0)
+                        configure(format, surface, null, 0)
+                        start()
+                    }
+                    decoder = currentDecoder
+
+                    val info = MediaCodec.BufferInfo()
+                    var frames = 0
+                    var lastUpdate = System.currentTimeMillis()
+                    val packetBuffer = ByteArray(1024 * 1024)
+                    var packetSize = 0
+                    val bitrate = "${scrcpyTool.currentQuality.bitRate / 1_000_000}Mbps"
+
+                    while (isActive && !activeStream.isClosed) {
+                        val data = try { activeStream.read() } catch (e: Exception) { null } ?: break
+                        
+                        if (packetSize + data.size <= packetBuffer.size) {
+                            System.arraycopy(data, 0, packetBuffer, packetSize, data.size)
+                            packetSize += data.size
+                        }
+
+                        if (packetSize < 5) continue 
+
+                        val inputIndex = currentDecoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US)
+                        if (inputIndex >= 0) {
+                            currentDecoder.getInputBuffer(inputIndex)?.apply {
+                                clear(); put(packetBuffer, 0, packetSize)
+                                currentDecoder.queueInputBuffer(inputIndex, 0, packetSize, System.nanoTime()/1000, 0)
+                            }
+                            packetSize = 0
+                        }
+
+                        var outIndex = currentDecoder.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US)
+                        while (outIndex >= 0) {
+                            currentDecoder.releaseOutputBuffer(outIndex, true)
+                            frames++
+                            outIndex = currentDecoder.dequeueOutputBuffer(info, 0)
+                        }
+
+                        val now = System.currentTimeMillis()
+                        if (now - lastUpdate >= 1000) {
+                            val fps = frames
+                            frames = 0; lastUpdate = now
+                            runOnUiThread {
+                                codecIndicator.text = "${currentCodec.uppercase()} | $fps FPS | $bitrate"
+                            }
                         }
                     }
                 }
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Timeout Mirror")
             } catch (e: Exception) {
-                Log.e(TAG, "Erro: ${e.message}")
+                Log.e(TAG, "Erro Mirror: ${e.message}")
             } finally {
                 runCatching { stream?.close() }
-                runCatching { decoder?.stop(); decoder?.release() }
+                runCatching { 
+                    decoder?.stop()
+                    decoder?.release() 
+                }
             }
         }
     }

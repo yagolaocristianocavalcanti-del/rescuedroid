@@ -3,6 +3,7 @@ package com.rescuedroid.rescuedroid.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -64,13 +65,27 @@ fun AdbRescueScreen(vm: MainViewModel, isConnected: Boolean, isConnecting: Boole
                 } else {
                     dispositivos.forEach { device ->
                         val isSel = selecionado?.serial == device.serial || (selecionado?.usbDevice != null && selecionado?.usbDevice?.deviceName == device.usbDevice?.deviceName)
+                        
+                        @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
                         Surface(
-                            onClick = { vm.selecionarDispositivo(device) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = { vm.selecionarDispositivo(device) },
+                                    onDoubleClick = {
+                                        vm.selecionarDispositivo(device)
+                                        if (device.type == "USB") {
+                                            vm.connectUsbAdvanced(context, usbMode)
+                                        } else {
+                                            vm.connectManual(context)
+                                        }
+                                    }
+                                ),
                             color = if (isSel) Color(0xFF1A3333) else Color.Transparent,
                             shape = RoundedCornerShape(4.dp),
                             border = if (isSel) BorderStroke(1.dp, Color.Cyan) else null
                         ) {
-                            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(8.dp).background(if (device.status == com.rescuedroid.rescuedroid.adb.DeviceStatus.ONLINE) Color.Green else Color.Red, CircleShape))
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {

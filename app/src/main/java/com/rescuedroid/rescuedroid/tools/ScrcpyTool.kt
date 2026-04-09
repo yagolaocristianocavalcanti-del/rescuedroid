@@ -19,12 +19,12 @@ class ScrcpyTool @Inject constructor(
     private val TAG = "SCRCPY"
     private val REMOTE_JAR = "/data/local/tmp/scrcpy-server.jar"
 
-    enum class Quality(val bitRate: Long, val maxSize: Int, val fps: Int) {
-        ULTRA(20_000_000, 1920, 60),
-        HIGH(8_000_000, 1280, 60),
-        STANDARD(4_000_000, 1024, 30),
-        LIGHT(2_000_000, 720, 30),
-        ULTRA_LIGHT(1_000_000, 480, 15)
+    enum class Quality(val bitRate: Long, val maxSize: Int, val fps: Int, val label: String) {
+        ULTRA(20_000_000, 1920, 60, "FULL HD+"),
+        HIGH(8_000_000, 1280, 60, "HD 1080p"),
+        STANDARD(4_000_000, 1024, 30, "Padrão"),
+        LIGHT(2_000_000, 720, 30, "Leve 720p"),
+        ULTRA_LIGHT(1_000_000, 480, 15, "Econômico")
     }
 
     @Volatile

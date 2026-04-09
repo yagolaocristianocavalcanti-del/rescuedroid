@@ -27,7 +27,8 @@ data class AdbDevice(
     val model: String? = null,
     val type: String = "USB", // "USB" ou "WIFI"
     val connection: AdbConnection? = null,
-    val usbDevice: android.hardware.usb.UsbDevice? = null
+    val usbDevice: android.hardware.usb.UsbDevice? = null,
+    val usbInfo: UsbDetector.UsbInfo? = null
 )
 
 object AdbManager {
@@ -35,7 +36,8 @@ object AdbManager {
     private const val REMOTE_PATH = "/system/bin:/system/xbin:/product/bin:/apex/com.android.runtime/bin"
     private const val CONNECT_TIMEOUT_MS = 15000L
     private const val HANDSHAKE_TIMEOUT_MS = 60000L
-    private const val DEFAULT_COMMAND_TIMEOUT_MS = 15000L
+    private const val DEFAULT_COMMAND_TIMEOUT_MS = 30000L // Aumentado de 15s para 30s
+    private const val MAX_RETRIES = 3 // Sistema de retry para comandos instáveis
     
     @Volatile
     var wifiConnection: AdbConnection? = null
@@ -87,8 +89,13 @@ object AdbManager {
     }
 
     suspend fun connect(context: Context, host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
+        lastErrorMessage = ""
+        if (host.isBlank()) {
+            lastErrorMessage = "Erro: Endereço IP/Host não pode estar vazio."
+            return@withContext false
+        }
+
         try {
-            lastErrorMessage = ""
             val socket = Socket()
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS.toInt())
             socket.tcpNoDelay = true
@@ -151,32 +158,49 @@ object AdbManager {
         timeoutMs: Long = DEFAULT_COMMAND_TIMEOUT_MS,
         target: AdbConnection? = activeConnection
     ): String = withContext(Dispatchers.IO) {
-        val conn = target ?: return@withContext "Erro: Não conectado"
-        try {
-            val remoteCommand = if (command.startsWith("host:")) command else buildShellCommand(command)
-            val output = StringBuilder()
-            val completed = withTimeoutOrNull(timeoutMs) {
-                val stream: AdbStream = conn.open(remoteCommand)
-                try {
-                    while (true) {
-                        val data = try { stream.read() } catch (e: Exception) { null } ?: break
-                        output.append(String(data))
+        val conn = target ?: return@withContext "Erro: Dispositivo não conectado ou conexão perdida."
+        
+        var currentAttempt = 0
+        var lastError: Exception? = null
+
+        while (currentAttempt < MAX_RETRIES) {
+            try {
+                val remoteCommand = if (command.startsWith("host:")) command else buildShellCommand(command)
+                val output = StringBuilder()
+                
+                val completed = withTimeoutOrNull(timeoutMs) {
+                    val stream: AdbStream = conn.open(remoteCommand)
+                    try {
+                        while (true) {
+                            val data = try { stream.read() } catch (e: Exception) { 
+                                if (currentAttempt < MAX_RETRIES - 1) throw e // Força o retry se não for a última tentativa
+                                null 
+                            } ?: break
+                            output.append(String(data))
+                        }
+                    } finally {
+                        runCatching { stream.close() }
                     }
-                } finally {
-                    runCatching { stream.close() }
+                    true
                 }
-                true
+
+                if (completed == true) {
+                    return@withContext output.toString().trim().ifEmpty { "Comando executado (sem retorno)." }
+                } else {
+                    lastErrorMessage = "Timeout técnico atingido após ${timeoutMs}ms"
+                    return@withContext "Erro: Tempo limite excedido."
+                }
+            } catch (e: Exception) {
+                lastError = e
+                currentAttempt++
+                Log.w(TAG, "Tentativa $currentAttempt falhou para: $command. Erro: ${e.message}")
+                if (currentAttempt < MAX_RETRIES) kotlinx.coroutines.delay(500) // Pequena pausa antes do retry
             }
-            if (completed != true) {
-                lastErrorMessage = "Tempo limite ao executar comando ADB"
-                return@withContext "Erro: tempo limite ao executar comando"
-            }
-            output.toString().trim().ifEmpty { "Comando enviado." }
-        } catch (e: Exception) {
-            lastErrorMessage = e.message ?: "Falha ao executar comando ADB"
-            Log.e(TAG, "Erro no comando: $command", e)
-            "Erro: ${e.message}"
         }
+
+        lastErrorMessage = lastError?.stackTraceToString() ?: "Falha desconhecida no canal ADB"
+        Log.e(TAG, "Erro crítico após $MAX_RETRIES tentativas: $command", lastError)
+        "Erro crítico de comunicação: ${lastError?.message}"
     }
 
     suspend fun exec(command: String, target: AdbConnection? = activeConnection): String = executeCommand(command, target = target)
@@ -314,6 +338,9 @@ object AdbManager {
             }
             
             if (isAdb) {
+                // DETECTAR USB
+                val usbInfo = UsbDetector.analyze(usbDevice)
+                
                 val model = usbDevice.productName ?: usbDevice.deviceName
                 val isThisConnected = usbConnection != null // Simplificação: assume que se há conexão USB, é este
                 devices.add(AdbDevice(
@@ -322,7 +349,8 @@ object AdbManager {
                     model = model, 
                     type = "USB", 
                     connection = if (isThisConnected) usbConnection else null,
-                    usbDevice = usbDevice
+                    usbDevice = usbDevice,
+                    usbInfo = usbInfo
                 ))
             }
         }

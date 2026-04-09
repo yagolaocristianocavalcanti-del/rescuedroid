@@ -4,6 +4,10 @@ import android.app.Application
 import android.provider.Settings
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.speech.RecognizerIntent
 import com.rescuedroid.rescuedroid.ai.IACmd
 import com.rescuedroid.rescuedroid.ai.IAEscuta
@@ -20,6 +24,15 @@ import com.rescuedroid.rescuedroid.debloat.DebloatRiskEngine
 import com.rescuedroid.rescuedroid.RiskLevel
 import com.rescuedroid.rescuedroid.model.*
 import com.rescuedroid.rescuedroid.adb.HistoryManager
+import com.rescuedroid.rescuedroid.data.local.ChatDao
+import com.rescuedroid.rescuedroid.data.local.ChatMessage
+import com.rescuedroid.rescuedroid.data.local.DeviceDao
+import com.rescuedroid.rescuedroid.data.local.KnownDevice
+import com.rescuedroid.rescuedroid.data.local.PackageDao
+import com.rescuedroid.rescuedroid.data.local.PackageCache
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -38,7 +51,10 @@ class MainViewModel @Inject constructor(
     application: Application,
     private val appManager: AppManager,
     private val debloatRiskEngine: DebloatRiskEngine,
-    private val scrcpyTool: ScrcpyTool
+    private val scrcpyTool: ScrcpyTool,
+    private val chatDao: ChatDao,
+    private val deviceDao: DeviceDao,
+    private val packageDao: PackageDao
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -84,6 +100,21 @@ class MainViewModel @Inject constructor(
         if (lastIp.isNotBlank()) {
             _manualIp.value = lastIp
             addLog("ℹ️ Último dispositivo conhecido: $lastIp")
+        }
+
+        // Carregar histórico da IA (apenas uma vez no início)
+        viewModelScope.launch {
+            val messages = chatDao.getAllMessagesInitial()
+            if (messages.isNotEmpty()) {
+                _ultimoComandoIA.value = messages.map {
+                    IAComando(
+                        texto = it.text,
+                        isFromIA = it.isFromIA == "true",
+                        sugestoes = it.suggestions.split(",").filter { s -> s.isNotBlank() },
+                        timestamp = it.timestamp
+                    )
+                }
+            }
         }
     }
 
@@ -163,67 +194,62 @@ class MainViewModel @Inject constructor(
     fun processarComandoIA(texto: String) {
         viewModelScope.launch {
             _isIAProcessing.value = true
-            _ultimoComandoIA.value = _ultimoComandoIA.value + IAComando(texto, false)
+            val novoComando = IAComando(texto, false)
+            _ultimoComandoIA.value = _ultimoComandoIA.value + novoComando
             
-            val textoNormalizado = texto.lowercase()
+            chatDao.insertMessage(ChatMessage(
+                text = texto, 
+                isFromIA = "false", 
+                suggestions = "", 
+                timestamp = novoComando.timestamp
+            ))
             
-            var sugestoes = emptyList<String>()
+            val cmd = IAEscuta.parseComando(texto)
+            val txt = texto.lowercase()
             
-            when {
-                textoNormalizado.contains("conecta usb") || textoNormalizado.contains("usb turbo") -> {
-                    executarUsbTurbo()
-                    sugestoes = listOf("Tirar Print", "Modo Hacker", "Sempre ON")
-                    responderIA("🔌 USB Turbo ativado! Dispositivo pronto para comandos de alta velocidade.", sugestoes)
+            // Lógica de pesquisa de pacotes
+            if (txt.contains("pesquisar pacote") || txt.contains("o que é o pacote") || txt.contains("o que e o pacote")) {
+                val pkg = txt.substringAfter("pacote").trim().removePrefix(" ").removeSuffix("?")
+                if (pkg.isNotEmpty() && pkg.contains(".")) {
+                    pesquisarPacoteWeb(pkg)
+                } else {
+                    responderIA("Para eu pesquisar, diga o nome completo do pacote (ex: com.android.chrome).", listOf("pesquisar pacote com.facebook.katana"))
                 }
-                textoNormalizado.contains("screenshot") || textoNormalizado.contains("print") -> {
-                    takeScreenshot()
-                    sugestoes = listOf("Ver Arquivos", "Desbloquear")
-                    responderIA("📸 Captura de tela realizada com sucesso!", sugestoes)
+            } else {
+                // Personalidade expandida
+                when {
+                    cmd != null -> executarComandoMapeado(cmd)
+                    
+                    txt.contains("quem é você") || txt.contains("quem e voce") || txt.contains("voce e o que") -> 
+                        responderIA("Eu sou a **PicoClaw**, a inteligência por trás do RescueDroid. Meu trabalho é garantir que nenhum celular morra na sua mão! Consigo automatizar comandos ADB, limpar lixos e até consertar telas quebradas via espelhamento.", listOf("conecta usb", "modo idoso"))
+                    
+                    txt.contains("ajuda") || txt.contains("preciso de ajuda") || txt.contains("socorro") ->
+                        responderIA("Calma, estou aqui! 🐾 Posso tentar: \n1. **Conectar USB** (Modo Turbo)\n2. **Tirar Print** da tela\n3. **Limpar apps inúteis**\n4. **Modo Idoso** (DPI alta)\nQual é a emergência?", listOf("conecta usb", "screenshot", "modo hacker"))
+
+                    txt.contains("bom dia") || txt.contains("boa tarde") || txt.contains("boa noite") ->
+                        responderIA("Olá! Espero que o dia de resgates esteja sendo produtivo. Em que posso te ajudar agora?", listOf("listar dispositivos", "conecta wifi"))
+
+                    txt.contains("obrigado") || txt.contains("valeu") || txt.contains("top") ->
+                        responderIA("Disponha! É um prazer ser útil. Se precisar de mais alguma coisa, é só miar! 😺", listOf("tirar print", "modo hacker"))
+                    
+                    txt.contains("limpar") || txt.contains("debloat") || txt.contains("remover lixo") -> {
+                    responderIA("Com certeza! Vou carregar a lista de apps e identificar o que é lixo digital para você.", listOf("Analisar Lista"))
+                    refreshDebloatApps()
                 }
-                textoNormalizado.contains("limpa tudo") || textoNormalizado.contains("limpa lixo") || textoNormalizado.contains("debloat") -> {
-                    debloatSeguroAutomatico()
-                    sugestoes = listOf("Ver Apps", "Modo Hacker")
-                    responderIA("🧠 Iniciando Debloat Inteligente... Removendo apps seguros conhecidos.", sugestoes)
+
+                txt.contains("analisar lista") || txt.contains("varredura") || txt.contains("pesquisar apps") -> {
+                    analisarListaComIA()
                 }
-                textoNormalizado.contains("hacker") -> {
-                    toggleHackerMode()
-                    sugestoes = listOf("conecta usb", "screenshot")
-                    val msg = if (_isHackerMode.value) "☢️ MODO HACKER ATIVADO. Acesso root simulado e comandos críticos liberados." else "🛡️ Modo Hacker desativado."
-                    responderIA(msg, sugestoes)
-                }
-                textoNormalizado.contains("tela ligada") || textoNormalizado.contains("timeout") -> {
-                    increaseScreenTimeout()
-                    sugestoes = listOf("Tirar Print", "Desbloquear")
-                    responderIA("⏰ Tela configurada para ficar ligada por 30 minutos (Modo Técnico).", sugestoes)
-                }
-                textoNormalizado.contains("wifi") || textoNormalizado.contains("conecta rede") -> {
-                    val ip = AdbManager.getDeviceIp()
-                    if (ip != null) {
-                        _manualIp.value = ip
-                        connectManual(getApplication())
-                        sugestoes = listOf("Listar Apps", "Tirar Print")
-                        responderIA("🔌 Detectado IP $ip. Tentando conexão ADB over WiFi...", sugestoes)
-                    } else {
-                        sugestoes = listOf("conectar ip 192.168.1.10", "ajuda")
-                        responderIA("⚠️ Não consegui detectar o IP automaticamente. Use: 'conectar ip [ENDEREÇO]'", sugestoes)
+
+                txt.contains("bateria") -> {
+                        val model = _deviceModel.value
+                        responderIA("Vou checar a energia do **$model**. Um segundo...", listOf("info bateria"))
+                        runQuickCommand("dumpsys battery", "Bateria")
                     }
-                }
-                textoNormalizado.contains("desbloquear") || textoNormalizado.contains("unlock") -> {
-                    blindUnlockAdvanced()
-                    sugestoes = listOf("Tirar Print", "Sempre ON")
-                    responderIA("🔓 Executando sequência de desbloqueio inteligente...", sugestoes)
-                }
-                else -> {
-                    val cmd = IAEscuta.parseComando(texto)
-                    when(cmd) {
-                        IACmd.UsbTurbo -> { executarUsbTurbo(); responderIA("🔌 USB Turbo ativado!", listOf("Tirar Print", "Modo Hacker")) }
-                        is IACmd.SetIp -> { _manualIp.value = cmd.ip; connectManual(getApplication()); responderIA("🌐 Configurando IP para ${cmd.ip}...", listOf("Listar Apps", "Desbloquear")) }
-                        IACmd.RequestStorage -> { pedirPermissaoStorage(); responderIA("📱 Solicitei permissão de armazenamento.", listOf("Tirar Print", "Explorar Arquivos")) }
-                        IACmd.ResetAdbKeys -> { val res = resetAdbKeys(); responderIA(res, listOf("conecta usb", "conecta wifi")) }
-                        else -> {
-                            sugestoes = listOf("conecta usb", "limpa tudo", "screenshot", "modo hacker")
-                            responderIA("❓ Não entendi. Tente: 'conecta usb', 'print', 'limpa lixo' ou 'modo hacker'.", sugestoes)
-                        }
+
+                    else -> {
+                        val msgFallback = "Entendi o que você disse, mas ainda estou aprendendo a lidar com essa intenção específica. Quer que eu tente analisar o dispositivo conectado?"
+                        responderIA(msgFallback, listOf("conecta usb", "screenshot", "modo idoso"))
                     }
                 }
             }
@@ -231,8 +257,163 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    private suspend fun pesquisarPacoteWeb(pkg: String, notificarChat: Boolean = true) {
+        // 1. Checar Cache
+        val cached = packageDao.getPackageInfo(pkg)
+        if (cached != null) {
+            if (notificarChat) {
+                val icone = when(cached.iconType) {
+                    "safe" -> "✅"
+                    "danger" -> "🚨"
+                    else -> "⚠️"
+                }
+                responderIA("$icone **$pkg** (Memória): ${cached.reason}", listOf("Remover agora", "Manter"))
+            }
+            return
+        }
+
+        if (notificarChat) responderIA("🔍 Farejando informações sobre o pacote **$pkg** na web...", listOf())
+        
+        withContext(Dispatchers.IO) {
+            try {
+                val analysis = debloatRiskEngine.check(pkg)
+                delay(800) // Simular latência de rede otimizada
+                
+                val iconType = when(analysis.risk) {
+                    com.rescuedroid.rescuedroid.RiskLevel.SEGURO -> "safe"
+                    com.rescuedroid.rescuedroid.RiskLevel.CRITICO -> "danger"
+                    else -> "warning"
+                }
+                
+                val info = PackageCache(
+                    packageName = pkg,
+                    isSafe = analysis.risk == com.rescuedroid.rescuedroid.RiskLevel.SEGURO,
+                    reason = analysis.reason + " (Web Intelligence)",
+                    iconType = iconType
+                )
+                
+                packageDao.insertOrUpdate(info)
+                
+                if (notificarChat) {
+                    withContext(Dispatchers.Main) {
+                        val icone = if (info.isSafe) "✅" else "🚨"
+                        responderIA("$icone **$pkg**: ${info.reason}.", listOf("Remover", "Mais info"))
+                    }
+                }
+            } catch (e: Exception) {
+                if (notificarChat) {
+                    withContext(Dispatchers.Main) {
+                        responderIA("❌ Tive um problema ao pesquisar **$pkg**.", listOf("Tentar de novo"))
+                    }
+                }
+            }
+        }
+    }
+
+    fun analisarListaComIA() {
+        viewModelScope.launch {
+            val listaAtual = _debloatApps.value
+            if (listaAtual.isEmpty()) {
+                responderIA("A lista de apps está vazia. Carregue-a primeiro no menu de Debloat!", listOf("Carregar Apps"))
+                return@launch
+            }
+
+            responderIA("Iniciando varredura inteligente na sua lista de apps instalados. Vou identificar pacotes suspeitos via Web...", listOf())
+            
+            // Filtra o que a IA ainda não conhece ou que o motor local marcou como perigoso/incerto
+            val suspeitos = listaAtual.filter { 
+                it.risk == RiskLevel.PERIGOSO || it.riskReason.contains("desconhecido", ignoreCase = true) 
+            }.take(10) // Processamos em lotes de 10 para segurança
+
+            if (suspeitos.isEmpty()) {
+                responderIA("Varredura concluída! Todos os apps na lista já são conhecidos ou seguros. Nada suspeito por aqui. 😎", listOf("Limpar Lixo", "Voltar"))
+                return@launch
+            }
+
+            suspeitos.forEach { app ->
+                pesquisarPacoteWeb(app.packageName, notificarChat = false)
+            }
+            
+            refreshDebloatApps() // Atualiza a UI com os novos dados do cache
+            
+            responderIA("Terminei! Analisei os pacotes suspeitos e atualizei as tags de risco na sua lista de Debloat. Dá uma olhada lá!", listOf("Ver Lista Atualizada", "Remover Recomendados"))
+        }
+    }
+
+    private suspend fun executarComandoMapeado(cmd: IACmd) {
+        when(cmd) {
+            IACmd.UsbTurbo -> {
+                executarUsbTurbo()
+                responderIA("🔌 USB Turbo ativado! Estamos operando em modo de alta resiliência.", listOf("Tirar Print", "Modo Hacker"))
+            }
+            IACmd.ConnectWifi -> {
+                val ip = AdbManager.getDeviceIp()
+                if (ip != null) {
+                    _manualIp.value = ip
+                    connectManual(getApplication())
+                    responderIA("📡 Encontrei o IP $ip na rede. Tentando o aperto de mão sem fio...", listOf("Ver Apps", "Tirar Print"))
+                } else {
+                    responderIA("⚠️ O dispositivo não revelou o IP. Tente me dizer: 'ip 192.168.x.x'", listOf("conecta usb"))
+                }
+            }
+            is IACmd.SetIp -> {
+                _manualIp.value = cmd.ip
+                connectManual(getApplication())
+                responderIA("🌐 Mira travada no IP ${cmd.ip}. Conectando...", listOf("Listar Apps", "Desbloquear"))
+            }
+            is IACmd.Debloat -> {
+                AdbManager.executeCommand("pm uninstall --user 0 ${cmd.pkg}")
+                responderIA("🧹 Faxina iniciada! Removendo o pacote ${cmd.pkg}.", listOf("Ver Apps", "Limpa Tudo"))
+            }
+            IACmd.DebloatAllSafe -> {
+                debloatSeguroAutomatico()
+                responderIA("🧠 Iniciando Debloat Inteligente. Vou focar apenas no que é seguro remover.", listOf("Ver Apps", "Modo Hacker"))
+            }
+            IACmd.RequestStorage -> {
+                pedirPermissaoStorage()
+                responderIA("📱 Solicitei acesso aos arquivos. Verifique a tela do celular!", listOf("Explorar Arquivos"))
+            }
+            IACmd.Screenshot -> {
+                takeScreenshot()
+                responderIA("📸 Captura de tela realizada com sucesso!", listOf("Ver Arquivos", "Desbloquear"))
+            }
+            IACmd.Unlock -> {
+                blindUnlockAdvanced()
+                responderIA("🔓 Enviando comandos de desbloqueio cego...", listOf("Tirar Print", "Sempre ON"))
+            }
+            IACmd.ScreenTimeout -> {
+                increaseScreenTimeout()
+                responderIA("⏰ Tela configurada para nunca desligar. Cuidado com a bateria!", listOf("Tirar Print", "Desbloquear"))
+            }
+            IACmd.SeniorMode -> {
+                ativarModoIdoso()
+                responderIA("👴 Modo Idoso Ativado! Tudo pronto para facilitar o uso: DPI 480, Brilho e Sons no máximo.", listOf("Tirar Print", "Desbloquear"))
+            }
+            IACmd.ToggleHacker -> {
+                toggleHackerMode()
+                val msg = if (_isHackerMode.value) "☢️ MODO HACKER ATIVADO. Use com cautela." else "🛡️ Modo Hacker desativado."
+                responderIA(msg, listOf("conecta usb", "screenshot"))
+            }
+            IACmd.ResetAdbKeys -> {
+                val res = resetAdbKeys()
+                responderIA(res, listOf("conecta usb", "conecta wifi"))
+            }
+        }
+    }
+
     private fun responderIA(texto: String, sugestoes: List<String>) {
-        _ultimoComandoIA.value = _ultimoComandoIA.value + IAComando(texto, true, sugestoes)
+        val resposta = IAComando(texto, true, sugestoes)
+        _ultimoComandoIA.value = _ultimoComandoIA.value + resposta
+        
+        // Persistir resposta da IA
+        viewModelScope.launch {
+            chatDao.insertMessage(ChatMessage(
+                text = texto,
+                isFromIA = "true",
+                suggestions = sugestoes.joinToString(","),
+                timestamp = resposta.timestamp
+            ))
+        }
     }
 
     private suspend fun executarUsbTurbo(): String {
@@ -304,8 +485,44 @@ class MainViewModel @Inject constructor(
         _dispositivoSelecionado.value = device
         _deviceModel.value = device?.model ?: "Nenhum"
         _isConnected.value = device?.status == DeviceStatus.ONLINE
+        
         if (device?.status == DeviceStatus.ONLINE) {
             _adbConnectionState.value = if (device.type == "WIFI") AdbConnectionState.CONECTADO_WIFI else AdbConnectionState.CONECTADO
+            
+            viewModelScope.launch {
+                val serial = device.serial
+                val existing = deviceDao.getDeviceBySerial(serial)
+                val nomeDispositivo = device.model ?: "Dispositivo Desconhecido"
+                
+                if (existing == null) {
+                    val newDev = KnownDevice(serial = serial, name = nomeDispositivo)
+                    deviceDao.insertOrUpdate(newDev)
+                    responderIA("Olá! Identifiquei um novo dispositivo: **$nomeDispositivo**. Já registrei ele na minha memória para os próximos resgates! 🐾", listOf("Tirar Print", "Ver Apps"))
+                } else {
+                    val updated = existing.copy(
+                        lastConnected = System.currentTimeMillis(),
+                        connectionCount = existing.connectionCount + 1
+                    )
+                    deviceDao.insertOrUpdate(updated)
+                    
+                    val saudacao = when {
+                        updated.connectionCount > 10 -> "Nossa, o **$nomeDispositivo** já é de casa! É a ${updated.connectionCount}ª vez que trabalhamos nele."
+                        updated.connectionCount > 5 -> "Bem-vindo de volta! O **$nomeDispositivo** está pronto para mais uma rodada de ajustes."
+                        else -> "Oi de novo! Reconheci o **$nomeDispositivo**. Vamos continuar de onde paramos?"
+                    }
+                    responderIA("$saudacao O que vamos fazer hoje?", listOf("Debloat Seguro", "Espelhar Tela", "Limpar Cache"))
+                }
+                
+                // CONEXÃO DIRETA: Se a IA de auto-conexão estiver ativa, não espera clique
+                if (_aiAutoConnect.value && device.status != DeviceStatus.ONLINE) {
+                    addLog("⚡ PicoClaw: Iniciando auto-conexão silenciosa...")
+                    if (device.type == "USB") {
+                        connectUsbAdvanced(getApplication(), _usbMode.value)
+                    } else {
+                        connectManual(getApplication())
+                    }
+                }
+            }
         } else {
             _adbConnectionState.value = AdbConnectionState.DESCONECTADO
         }
@@ -491,6 +708,41 @@ class MainViewModel @Inject constructor(
 
     fun tecla(code: Int) = sendAdbKey(code)
 
+    private fun ativarModoIdoso() {
+        viewModelScope.launch {
+            addLog("👴 IA: Configurando Dispositivo para Modo Idoso...")
+            // Aumentar densidade de tela (ícones maiores) - valor aproximado para escala grande
+            AdbManager.executeCommand("wm density 480") 
+            // Brilho no máximo
+            AdbManager.executeCommand("settings put system screen_brightness 255")
+            // Volume no máximo (Stream 3 = Music)
+            AdbManager.executeCommand("service call audio 3 i32 3 i32 15 i32 1")
+            // Ativar legendas se disponível (simplificado)
+            AdbManager.executeCommand("settings put secure accessibility_captioning_enabled 1")
+            
+            addLog("✅ Dispositivo adaptado com sucesso!")
+            vibrarSucesso()
+        }
+    }
+
+    private fun vibrarSucesso() {
+        val context = getApplication<Application>()
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vibratorManager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createOneShot(100, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(100)
+        }
+    }
+
     fun blindUnlockAdvanced() {
         viewModelScope.launch {
             addLog("🔓 Iniciando Sequência de Desbloqueio Cego...")
@@ -499,6 +751,7 @@ class MainViewModel @Inject constructor(
             AdbManager.executeCommand("input swipe 500 1500 500 500 200")
             delay(500)
             addLog("✅ Sequência de deslize enviada.")
+            vibrarSucesso()
         }
     }
 
@@ -507,6 +760,7 @@ class MainViewModel @Inject constructor(
             addLog("📸 Capturando tela...")
             AdbManager.executeCommand("screencap -p /data/local/tmp/screen.png")
             addLog("✅ Print salvo em /data/local/tmp/screen.png")
+            vibrarSucesso()
         }
     }
 
@@ -550,10 +804,38 @@ class MainViewModel @Inject constructor(
             try {
                 val packages = appManager.listApps()
                 val appsInfo = packages.map { pkg ->
+                    // Tenta obter info da IA primeiro (Cache)
+                    val cached = packageDao.getPackageInfo(pkg)
                     val analysis = debloatRiskEngine.check(pkg)
-                    AppInfo(pkg, pkg.substringAfterLast("."), null, analysis.risk != RiskLevel.CRITICO, analysis.risk, analysis.score, analysis.reason)
+                    
+                    val finalRisk = if (cached != null) {
+                        if (cached.isSafe) RiskLevel.SEGURO else RiskLevel.PERIGOSO
+                    } else analysis.risk
+                    
+                    val finalReason = if (cached != null) {
+                        "${if (cached.isSafe) "✅" else "🚨"} [IA] ${cached.reason}"
+                    } else {
+                        analysis.reason
+                    }
+
+                    AppInfo(
+                        packageName = pkg,
+                        label = pkg.substringAfterLast("."),
+                        icon = null,
+                        isBloat = finalRisk != RiskLevel.CRITICO,
+                        risk = finalRisk,
+                        riskScore = analysis.score,
+                        riskReason = finalReason,
+                        acaoSugerida = analysis.suggestedAction
+                    )
                 }
                 _debloatApps.value = appsInfo
+                
+                // Se a IA de Auto-Modificação estiver ativa, ela comenta sobre a lista
+                if (_aiAutoModify.value && appsInfo.any { it.risk == RiskLevel.SEGURO }) {
+                    val count = appsInfo.count { it.risk == RiskLevel.SEGURO }
+                    responderIA("Terminei de analisar os apps! Encontrei **$count pacotes** que parecem ser bloatwares seguros para remover. Quer que eu faça a limpeza?", listOf("Sim, limpa tudo", "Vou revisar primeiro"))
+                }
             } finally { _isRefreshingApps.value = false }
         }
     }

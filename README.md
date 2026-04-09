@@ -21,17 +21,33 @@ O **RescueDroid** é uma suíte avançada de manutenção e resgate via ADB, ago
 ```text
 rescuedroid2/
 ├── app/src/main/java/com/rescuedroid/rescuedroid/
-│   ├── adb/                 # 🔌 NÚCLEO ADB (Coração)
-│   │   ├── UsbAdbConnector.kt  # Handshake USB (Normal, Turbo, Martelo)
-│   │   └── AdbKeyManager.kt    # Gestão de chaves RSA
+│   ├── adb/                 # 🔌 NÚCLEO ADB (O "Coração" do App)
+│   │   ├── AdbManager.kt       # Execução de comandos e estados
+│   │   ├── UsbAdbConnector.kt  # Handshake USB (Normal, Forte, Martelo)
+│   │   ├── AdbKeyManager.kt    # Gestão de chaves RSA e Autorização
+│   │   └── HistoryManager.kt   # Histórico de dispositivos e conexões
 │   │
-│   ├── ai/                  # 🤖 PICO CLAW (Cérebro)
-│   │   ├── IAEscuta.kt         # Parser de voz via PicoClaw
-│   │   └── IACmd.kt            # Orquestração de comandos IA
+│   ├── ai/                  # 🤖 INTELIGÊNCIA ARTIFICIAL (PicoClaw)
+│   │   ├── IAEscuta.kt         # Parser de voz e linguagem natural
+│   │   └── IACmd.kt            # Definição de intenções e comandos
 │   │
-│   ├── ui/                  # 🎨 INTERFACE (Compose)
-│   │   ├── SupportScreen.kt    # Chat IA e Voz
-│   │   └── ScrcpyScreen.kt     # Mirroring
+│   ├── ui/                  # 🎨 INTERFACE (Jetpack Compose)
+│   │   ├── MainActivity.kt     # Container Principal e FAB Global
+│   │   ├── SupportScreen.kt    # Chat IA e Comandos de Voz
+│   │   ├── DebloatScreen.kt    # Gerenciador de Apps e Risco
+│   │   ├── AutomationScreen.kt # Editor de Scripts Shell (.sh)
+│   │   └── ScrcpyScreen.kt     # Espelhamento de Tela (Mirror)
 │   │
-│   └── debloat/             # 🧹 LIMPEZA
-│       └── DebloatRiskEngine.kt# Analisador de risco
+│   ├── viewmodel/           # 🧠 LÓGICA DE ESTADO (MVVM)
+│   │   └── MainViewModel.kt    # Orquestrador de dados e UI
+│   │
+│   ├── components/          # ✨ COMPONENTES VISUAIS
+│   │   └── HackerModeOverlay.kt# Efeitos visuais e animações
+│   │
+│   └── debloat/             # 🧹 ENGINE DE LIMPEZA
+│       └── DebloatRiskEngine.kt# Analisador de segurança de pacotes
+│
+├── bin/                     # 📦 DISTRIBUIÇÃO
+│   └── RescueDroid-2.0-BETA.apk # Instalador atualizado
+│
+└── build.gradle.kts         # ⚙️ CONFIGURAÇÕES (Version 2.0-BETA)

@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 
 object UsbAdbConnector {
     enum class ProgressEvent {
@@ -40,44 +41,44 @@ object UsbAdbConnector {
     ) {
         NORMAL(
             label = "normal",
-            handshakeAttempts = 1,
-            handshakeTimeoutMs = 7000L,
-            retryDelayMs = 1200L,
-            permissionTimeoutMs = 12000L,
-            reenumerationTimeoutMs = 4000L,
+            handshakeAttempts = 2,
+            handshakeTimeoutMs = 30000L,
+            retryDelayMs = 2000L,
+            permissionTimeoutMs = 15000L,
+            reenumerationTimeoutMs = 5000L,
             rotateKeyOnRetry = false,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = 16384
         ),
         STRONG(
             label = "forte",
-            handshakeAttempts = 3,
-            handshakeTimeoutMs = 10000L,
-            retryDelayMs = 2200L,
-            permissionTimeoutMs = 18000L,
-            reenumerationTimeoutMs = 7000L,
+            handshakeAttempts = 4,
+            handshakeTimeoutMs = 45000L,
+            retryDelayMs = 3000L,
+            permissionTimeoutMs = 20000L,
+            reenumerationTimeoutMs = 8000L,
             rotateKeyOnRetry = false,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = 16384
         ),
         HAMMER(
             label = "martelo",
-            handshakeAttempts = 5,
-            handshakeTimeoutMs = 13000L,
-            retryDelayMs = 3000L,
-            permissionTimeoutMs = 22000L,
-            reenumerationTimeoutMs = 10000L,
+            handshakeAttempts = 6,
+            handshakeTimeoutMs = 60000L,
+            retryDelayMs = 4000L,
+            permissionTimeoutMs = 30000L,
+            reenumerationTimeoutMs = 12000L,
             rotateKeyOnRetry = true,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = 16384
         ),
         LEGACY(
             label = "legado",
-            handshakeAttempts = 3,
-            handshakeTimeoutMs = 16000L,
-            retryDelayMs = 3600L,
-            permissionTimeoutMs = 22000L,
-            reenumerationTimeoutMs = 12000L,
+            handshakeAttempts = 4,
+            handshakeTimeoutMs = 60000L,
+            retryDelayMs = 4000L,
+            permissionTimeoutMs = 30000L,
+            reenumerationTimeoutMs = 15000L,
             rotateKeyOnRetry = true,
             connectVersion = AdbProtocol.CONNECT_VERSION,
             connectMaxData = AdbProtocol.CONNECT_MAXDATA
@@ -114,318 +115,73 @@ object UsbAdbConnector {
 
         if (!usbManager.hasPermission(device)) {
             onProgress?.invoke(ProgressEvent.REQUESTING_PERMISSION)
-            Log.d(TAG, "Solicitando permissao USB no modo ${mode.label}...")
             val permissionResult = requestPermission(context, usbManager, device, mode.permissionTimeoutMs)
             if (permissionResult != UsbPermissionResult.GRANTED) {
                 lastErrorMessage = when (permissionResult) {
-                    UsbPermissionResult.DENIED -> "Permissao USB negada pelo usuario"
-                    UsbPermissionResult.TIMEOUT -> "Popup de permissao USB nao respondeu"
-                    UsbPermissionResult.GRANTED -> ""
+                    UsbPermissionResult.DENIED -> "Permissão USB negada"
+                    UsbPermissionResult.TIMEOUT -> "Tempo de permissão esgotado"
+                    else -> "Falha na permissão"
                 }
-                Log.e(TAG, lastErrorMessage)
                 return@withContext false
             }
-
-            // Muitos aparelhos re-enumeram o USB logo apos o OK do popup.
             onProgress?.invoke(ProgressEvent.PERMISSION_GRANTED)
-            onProgress?.invoke(ProgressEvent.WAITING_DEVICE_SETTLE)
-            waitForDeviceSettling(usbManager, device, mode.reenumerationTimeoutMs)
-        } else {
-            onProgress?.invoke(ProgressEvent.PERMISSION_GRANTED)
+            delay(1000) // Tempo para o dispositivo re-enumerar
         }
 
-        val iface = findAdbInterface(device)
-        if (iface == null) {
-            lastErrorMessage = "Nenhuma interface ADB encontrada no dispositivo USB"
+        val iface = findAdbInterface(device) ?: run {
+            lastErrorMessage = "Interface ADB não encontrada"
             return@withContext false
         }
         onProgress?.invoke(ProgressEvent.DEVICE_READY)
 
         val keyManager = AdbKeyManager(context)
-        var crypto = keyManager.getOrCreateCrypto() ?: run {
-            lastErrorMessage = "Nao foi possivel carregar ou gerar a chave ADB"
-            return@withContext false
-        }
+        var crypto = keyManager.getOrCreateCrypto() ?: return@withContext false
 
         repeat(mode.handshakeAttempts) { index ->
             val attempt = index + 1
-            if (mode.rotateKeyOnRetry && attempt > 1) {
-                crypto = keyManager.forceRegenerateCrypto() ?: crypto
-                Log.w(TAG, "Regenerando chave ADB para tentativa $attempt/${mode.handshakeAttempts}")
-            }
-
-            val currentDevice = waitForCurrentDevice(usbManager, device, mode.reenumerationTimeoutMs)
-            if (currentDevice == null) {
-                lastErrorMessage = "O dispositivo USB foi reconectado, removido ou trocou de identificador"
-                if (attempt == mode.handshakeAttempts) return@withContext false
-                delay(mode.retryDelayMs)
-                return@repeat
-            }
-
-            val currentInterface = findAdbInterface(currentDevice)
-            if (currentInterface == null) {
-                lastErrorMessage = "Nenhuma interface ADB encontrada no dispositivo USB"
-                if (attempt == mode.handshakeAttempts) return@withContext false
-                delay(mode.retryDelayMs)
-                return@repeat
-            }
-
-            val usbConnection = openDeviceWithRetries(
-                context = context,
-                usbManager = usbManager,
-                originalDevice = device,
-                initialDevice = currentDevice,
-                permissionTimeoutMs = mode.permissionTimeoutMs,
-                timeoutMs = mode.reenumerationTimeoutMs,
-                retryDelayMs = 350L
-            )
-            if (usbConnection == null) {
-                if (lastErrorMessage.isBlank()) {
-                    lastErrorMessage = "Permissao USB concedida, mas o Android nao liberou acesso ao dispositivo"
-                }
-                return@withContext false
-            }
-
-            var adbConnInstance: AdbConnection? = null
+            val usbConnection = usbManager.openDevice(device) ?: return@repeat
+            
+            var adbConnCreated = false
             try {
-                val claimed = claimInterfaceWithRetries(
-                    usbConnection = usbConnection,
-                    currentInterface = currentInterface,
-                    timeoutMs = mode.reenumerationTimeoutMs,
-                    retryDelayMs = 300L
-                )
-                if (!claimed) {
-                    lastErrorMessage = "Nao foi possivel assumir a interface USB ADB"
-                    usbConnection.close()
-                    if (attempt == mode.handshakeAttempts) return@withContext false
-                    delay(mode.retryDelayMs)
-                    return@repeat
-                }
+                if (usbConnection.claimInterface(iface, true)) {
+                    val epIn = (0 until iface.endpointCount).map { iface.getEndpoint(it) }.first { it.direction == UsbConstants.USB_DIR_IN }
+                    val epOut = (0 until iface.endpointCount).map { iface.getEndpoint(it) }.first { it.direction == UsbConstants.USB_DIR_OUT }
 
-                val epIn = (0 until currentInterface.endpointCount)
-                    .map { currentInterface.getEndpoint(it) }
-                    .firstOrNull {
-                        it.direction == UsbConstants.USB_DIR_IN &&
-                            it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
-                    }
-                val epOut = (0 until currentInterface.endpointCount)
-                    .map { currentInterface.getEndpoint(it) }
-                    .firstOrNull {
-                        it.direction == UsbConstants.USB_DIR_OUT &&
-                            it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
-                    }
-
-                if (epIn == null || epOut == null) {
-                    lastErrorMessage = "Endpoints USB ADB nao encontrados"
-                    usbConnection.close()
-                    return@withContext false
-                }
-
-                val channel = UsbChannel(usbConnection, epIn, epOut)
-                val adbConn = AdbConnection.create(
-                    channel,
-                    crypto,
-                    mode.connectVersion,
-                    mode.connectMaxData
-                )
-                adbConnInstance = adbConn
-                onProgress?.invoke(ProgressEvent.SAYING_HELLO)
-                
-                // Pequeno delay para estabilizacao eletrica/protocolo antes do handshake
-                delay(400L)
-                
-                onProgress?.invoke(ProgressEvent.HANDSHAKE_START)
-                
-                // Tenta o handshake com um retry interno rapido se falhar por timeout
-                var connected = false
-                val startTime = System.currentTimeMillis()
-                
-                while (System.currentTimeMillis() - startTime < mode.handshakeTimeoutMs && !connected) {
-                    try {
-                        // Passamos o timeout restante para o connect interno
-                        val remaining = mode.handshakeTimeoutMs - (System.currentTimeMillis() - startTime)
-                        if (remaining <= 0) break
-                        
-                        adbConn.connect(remaining.coerceAtLeast(3000L))
-                        connected = true
-                    } catch (e: Exception) {
-                        val msg = e.message ?: ""
-                        Log.w(TAG, "Tentativa de handshake falhou: $msg")
-                        
-                        // Se o erro for de escrita ou I/O, abortamos este canal imediatamente
-                        if (msg.contains("escrita", ignoreCase = true) || 
-                            msg.contains("read", ignoreCase = true) || 
-                            e is java.io.IOException) {
-                            throw e 
-                        }
-                        
-                        // No modo MARTELO, se falhar por timeout de handshake, tentamos novamente rápido
-                        // sem fechar o canal USB se possível, ou deixamos o loop externo cuidar disso.
-                        if (mode == ConnectMode.HAMMER) {
-                             delay(500)
-                        } else {
-                             break // Outros modos saem para o retry externo (que reabre o USB)
-                        }
-                    }
+                    val channel = UsbChannel(usbConnection, epIn, epOut)
+                    val adbConn = AdbConnection.create(channel, crypto, mode.connectVersion, mode.connectMaxData)
                     
-                    if (connected) {
-                        Log.d(TAG, "Handshake concluido com sucesso!")
-                        break // Sai do loop de handshake interno
+                    onProgress?.invoke(ProgressEvent.HANDSHAKE_START)
+                    try {
+                        adbConn.connect(mode.handshakeTimeoutMs)
+                        AdbManager.setUsbConnection(adbConn)
+                        adbConnCreated = true
+                        return@withContext true
+                    } catch (e: Exception) {
+                        lastErrorMessage = "Falha no Handshake: ${e.message}"
+                        // Adblib chama channel.close() em caso de falha, que fecha o usbConnection.
                     }
                 }
-
-                if (connected) {
-                    AdbManager.setUsbConnection(adbConn)
-                    Log.d(TAG, "Conexão USB estabelecida com sucesso no modo ${mode.label}")
-                    // IMPORTANTE: Não fechamos usbConnection aqui pois adbConn agora a possui via UsbChannel
-                    return@withContext true 
-                }
-
-                lastErrorMessage =
-                    "Permissão USB concedida, mas o handshake ADB falhou no outro aparelho (tentativa $attempt/${mode.handshakeAttempts}, modo ${mode.label})"
             } catch (e: Exception) {
-                lastErrorMessage =
-                    e.message ?: "Erro no handshake USB (tentativa $attempt/${mode.handshakeAttempts}, modo ${mode.label})"
-                Log.e(TAG, "Erro no handshake USB: ${e.message}", e)
+                lastErrorMessage = "Erro USB: ${e.message}"
             } finally {
-                // Só fechamos se não tivermos tido sucesso em estabelecer a conexão global
-                // ou se a conexão que acabamos de criar NÃO for a mesma que está no AdbManager
-                val currentConn = AdbManager.usbConnection
-                if (currentConn == null || currentConn.isClosed || currentConn !== adbConnInstance) {
-                    runCatching { usbConnection.releaseInterface(currentInterface) }
-                    runCatching { usbConnection.close() }
+                // Se não criou a conexão global, garantimos que esta instância local de USB seja fechada
+                // Mas apenas se o adbConn já não tiver fechado ela via channel.close()
+                if (!adbConnCreated) {
+                    try { usbConnection.releaseInterface(iface) } catch (e: Exception) {}
+                    try { usbConnection.close() } catch (e: Exception) {}
                 }
             }
-
-            if (attempt < mode.handshakeAttempts) {
-                delay(mode.retryDelayMs)
-            }
+            delay(mode.retryDelayMs)
         }
-
         false
     }
 
     private fun findAdbInterface(device: UsbDevice): android.hardware.usb.UsbInterface? {
-        // Itera sobre todas as interfaces para encontrar explicitamente a do ADB (Vendor Class 0xFF)
         for (i in 0 until device.interfaceCount) {
             val iface = device.getInterface(i)
-            if (iface.interfaceClass == UsbConstants.USB_CLASS_VENDOR_SPEC &&
-                iface.interfaceSubclass == 0x42 &&
-                iface.interfaceProtocol == 0x01
-            ) {
-                return iface
-            }
+            if (iface.interfaceClass == 0xFF && iface.interfaceSubclass == 0x42) return iface
         }
         return null
-    }
-
-    private fun resolveCurrentDevice(usbManager: UsbManager, originalDevice: UsbDevice): UsbDevice? {
-        usbManager.deviceList.values.firstOrNull { it.deviceName == originalDevice.deviceName }?.let {
-            return it
-        }
-        return usbManager.deviceList.values.firstOrNull {
-            it.vendorId == originalDevice.vendorId &&
-                it.productId == originalDevice.productId &&
-                findAdbInterface(it) != null
-        }
-    }
-
-    private suspend fun waitForDeviceSettling(
-        usbManager: UsbManager,
-        originalDevice: UsbDevice,
-        timeoutMs: Long
-    ) {
-        waitForCurrentDevice(usbManager, originalDevice, timeoutMs)
-        delay(500L)
-    }
-
-    private suspend fun waitForCurrentDevice(
-        usbManager: UsbManager,
-        originalDevice: UsbDevice,
-        timeoutMs: Long
-    ): UsbDevice? {
-        val startedAt = System.currentTimeMillis()
-        var lastSeen: UsbDevice? = null
-        while (System.currentTimeMillis() - startedAt < timeoutMs) {
-            val device = resolveCurrentDevice(usbManager, originalDevice)
-            if (device != null) {
-                lastSeen = device
-                if (findAdbInterface(device) != null) {
-                    return device
-                }
-            }
-            delay(250L)
-        }
-        return lastSeen
-    }
-
-    private suspend fun openDeviceWithRetries(
-        context: Context,
-        usbManager: UsbManager,
-        originalDevice: UsbDevice,
-        initialDevice: UsbDevice,
-        permissionTimeoutMs: Long,
-        timeoutMs: Long,
-        retryDelayMs: Long
-    ) = withContext(Dispatchers.IO) {
-        val startedAt = System.currentTimeMillis()
-        var deviceCandidate: UsbDevice? = initialDevice
-        while (System.currentTimeMillis() - startedAt < timeoutMs) {
-            val activeDevice = deviceCandidate ?: resolveCurrentDevice(usbManager, originalDevice)
-            if (activeDevice != null) {
-                if (!usbManager.hasPermission(activeDevice)) {
-                    lastErrorMessage = "O dispositivo USB foi reenumerado e precisa de permissao novamente"
-                    val permissionResult = requestPermission(
-                        context = context,
-                        manager = usbManager,
-                        device = activeDevice,
-                        timeoutMs = permissionTimeoutMs
-                    )
-                    if (permissionResult != UsbPermissionResult.GRANTED) {
-                        lastErrorMessage = when (permissionResult) {
-                            UsbPermissionResult.DENIED -> "Permissao USB negada pelo usuario"
-                            UsbPermissionResult.TIMEOUT -> "Popup de permissao USB nao respondeu"
-                            UsbPermissionResult.GRANTED -> ""
-                        }
-                        delay(retryDelayMs)
-                        deviceCandidate = resolveCurrentDevice(usbManager, originalDevice)
-                        continue
-                    }
-                    delay(300L)
-                }
-                try {
-                    usbManager.openDevice(activeDevice)?.let { return@withContext it }
-                    lastErrorMessage = "Permissao USB concedida, mas o Android ainda nao liberou acesso ao dispositivo"
-                } catch (e: IllegalArgumentException) {
-                    lastErrorMessage = "O Android recusou abrir o dispositivo USB atual; tente reconectar o cabo"
-                    Log.e(TAG, lastErrorMessage, e)
-                } catch (e: SecurityException) {
-                    lastErrorMessage = "O Android reenumerou o USB e removeu a permissao do app para o dispositivo atual"
-                    Log.e(TAG, lastErrorMessage, e)
-                }
-            } else {
-                lastErrorMessage = "O dispositivo USB foi reconectado, removido ou trocou de identificador"
-            }
-            delay(retryDelayMs)
-            deviceCandidate = resolveCurrentDevice(usbManager, originalDevice)
-        }
-        null
-    }
-
-    private suspend fun claimInterfaceWithRetries(
-        usbConnection: android.hardware.usb.UsbDeviceConnection,
-        currentInterface: android.hardware.usb.UsbInterface,
-        timeoutMs: Long,
-        retryDelayMs: Long
-    ): Boolean {
-        val startedAt = System.currentTimeMillis()
-        while (System.currentTimeMillis() - startedAt < timeoutMs) {
-            if (usbConnection.claimInterface(currentInterface, true)) {
-                return true
-            }
-            delay(retryDelayMs)
-        }
-        return false
     }
 
     private enum class UsbPermissionResult { GRANTED, DENIED, TIMEOUT }
@@ -437,16 +193,13 @@ object UsbAdbConnector {
         timeoutMs: Long
     ): UsbPermissionResult {
         val deferred = CompletableDeferred<UsbPermissionResult>()
+        val unregisterCalled = AtomicBoolean(false)
+        
         val usbReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
+            override fun onReceive(c: Context, intent: Intent) {
                 if (ACTION_USB_PERMISSION == intent.action) {
-                    synchronized(this) {
-                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                        deferred.complete(
-                            if (granted) UsbPermissionResult.GRANTED else UsbPermissionResult.DENIED
-                        )
-                    }
-                    context.unregisterReceiver(this)
+                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    deferred.complete(if (granted) UsbPermissionResult.GRANTED else UsbPermissionResult.DENIED)
                 }
             }
         }
@@ -457,16 +210,23 @@ object UsbAdbConnector {
             PendingIntent.FLAG_UPDATE_CURRENT
         }
 
-        val permissionIntent =
-            PendingIntent.getBroadcast(context, 0, Intent(ACTION_USB_PERMISSION), flags)
+        val permissionIntent = PendingIntent.getBroadcast(context, 0, Intent(ACTION_USB_PERMISSION), flags)
         val filter = IntentFilter(ACTION_USB_PERMISSION)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            context.registerReceiver(usbReceiver, filter)
+        
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(usbReceiver, filter)
+            }
+            manager.requestPermission(device, permissionIntent)
+            return withTimeoutOrNull(timeoutMs) { deferred.await() } ?: UsbPermissionResult.TIMEOUT
+        } finally {
+            if (unregisterCalled.compareAndSet(false, true)) {
+                try { context.unregisterReceiver(usbReceiver) } catch (e: Exception) {
+                    Log.w(TAG, "Erro ao desregistrar receiver: ${e.message}")
+                }
+            }
         }
-
-        manager.requestPermission(device, permissionIntent)
-        return withTimeoutOrNull(timeoutMs) { deferred.await() } ?: UsbPermissionResult.TIMEOUT
     }
 }

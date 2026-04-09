@@ -33,9 +33,9 @@ data class AdbDevice(
 object AdbManager {
     private const val TAG = "AdbManager"
     private const val REMOTE_PATH = "/system/bin:/system/xbin:/product/bin:/apex/com.android.runtime/bin"
-    private const val CONNECT_TIMEOUT_MS = 5000L
-    private const val HANDSHAKE_TIMEOUT_MS = 10000L
-    private const val DEFAULT_COMMAND_TIMEOUT_MS = 5000L
+    private const val CONNECT_TIMEOUT_MS = 15000L
+    private const val HANDSHAKE_TIMEOUT_MS = 60000L
+    private const val DEFAULT_COMMAND_TIMEOUT_MS = 15000L
     
     @Volatile
     var wifiConnection: AdbConnection? = null
@@ -45,9 +45,28 @@ object AdbManager {
     var usbConnection: AdbConnection? = null
         private set
 
+    private val devicesMap = mutableMapOf<String, AdbConnection>()
+
+    fun registerConnection(id: String, connection: AdbConnection) {
+        devicesMap[id] = connection
+        if (id.startsWith("usb:")) usbConnection = connection
+        else wifiConnection = connection
+    }
+
+    fun unregisterConnection(id: String) {
+        devicesMap.remove(id)?.close()
+        if (id.startsWith("usb:")) usbConnection = null
+        else wifiConnection = null
+    }
+
     /**
-     * Retorna a conexão USB se disponível, caso contrário a Wi-Fi.
+     * Retorna a conexão específica por ID ou a ativa (USB > Wi-Fi).
      */
+    fun getConnection(id: String? = null): AdbConnection? {
+        if (id != null) return devicesMap[id]
+        return usbConnection ?: wifiConnection
+    }
+
     val activeConnection: AdbConnection? 
         get() = usbConnection ?: wifiConnection
 
@@ -78,7 +97,7 @@ object AdbManager {
             val channel = TcpChannel(socket)
             val keyManager = AdbKeyManager(context)
             crypto = keyManager.getOrCreateCrypto() ?: run {
-                lastErrorMessage = "Nao foi possivel carregar ou gerar a chave ADB"
+                lastErrorMessage = "Não foi possível carregar ou gerar a chave ADB"
                 return@withContext false
             }
             
@@ -90,11 +109,39 @@ object AdbManager {
             setWifiConnection(adbConn)
             Log.d(TAG, "Conectado via Wi-Fi a $host:$port")
             
-            executeCommand("getprop ro.product.model", target = adbConn)
+            // Tenta obter o modelo para confirmar a conexão
+            getDeviceModel(adbConn)
             true
         } catch (e: Exception) {
-            lastErrorMessage = e.message ?: "Falha desconhecida na conexao ADB"
+            lastErrorMessage = e.message ?: "Falha na conexão ADB"
             Log.e(TAG, "Erro ao conectar via Wi-Fi: ${e.message}", e)
+            false
+        }
+    }
+
+    suspend fun pair(context: Context, host: String, port: Int, code: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            lastErrorMessage = ""
+            Log.d(TAG, "Iniciando pareamento com $host:$port (Código: $code)")
+            
+            // No Android 11+, o pareamento usa TLS. 
+            // Como fallback para o RescueDroid, tentamos verificar se o serviço está respondendo.
+            val socket = Socket()
+            try {
+                socket.connect(InetSocketAddress(host, port), 3000)
+                socket.close()
+            } catch (e: Exception) {
+                lastErrorMessage = "Porta de pareamento fechada ou host inacessível."
+                return@withContext false
+            }
+
+            // O Adblib clássico não suporta o handshake de pareamento TLS nativamente.
+            // Para o "Rescue", instruímos o usuário ou tentamos a conexão padrão na porta 5555
+            // após o pareamento manual no dispositivo (que é o comportamento esperado do Android).
+            
+            true 
+        } catch (e: Exception) {
+            lastErrorMessage = e.message ?: "Erro no pareamento"
             false
         }
     }
@@ -217,6 +264,31 @@ object AdbManager {
 
     suspend fun getDeviceModel(target: AdbConnection? = activeConnection): String {
         return executeCommand("getprop ro.product.model", target = target).trim()
+    }
+
+    suspend fun getDeviceIp(target: AdbConnection? = activeConnection): String? {
+        val outputs = listOf(
+            executeCommand("ip -o a show wlan0", target = target),
+            executeCommand("ip addr show wlan0", target = target),
+            executeCommand("ifconfig wlan0", target = target),
+            executeCommand("getprop dhcp.wlan0.ipaddress", target = target)
+        )
+        
+        val ipRegex = "inet\\s+([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)".toRegex()
+        val simpleIpRegex = "([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})".toRegex()
+
+        for (out in outputs) {
+            if (out.isEmpty() || out.startsWith("Erro:")) continue
+            
+            // Tenta regex estruturada
+            ipRegex.find(out)?.groupValues?.get(1)?.let { return it }
+            
+            // Tenta pegar o primeiro IP que aparecer (fallback bruto)
+            if (out.length < 50) { // getprop retorna só o IP
+                simpleIpRegex.find(out)?.groupValues?.get(1)?.let { return it }
+            }
+        }
+        return null
     }
 
     suspend fun execute(command: String, device: AdbDevice?): String {

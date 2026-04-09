@@ -1,6 +1,10 @@
 package com.rescuedroid.rescuedroid.ui
 
+import android.view.MotionEvent
 import android.view.KeyEvent
+import android.view.View
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -29,14 +33,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.rescuedroid.rescuedroid.tools.ScrcpyTool
 import com.rescuedroid.rescuedroid.viewmodel.AdbConnectionState
 import com.rescuedroid.rescuedroid.viewmodel.MainViewModel
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 
 @Composable
 fun ScrcpyScreen(vm: MainViewModel) {
+    val session by vm.session.collectAsStateWithLifecycle()
     val isMirroring by vm.isMirroring.collectAsStateWithLifecycle()
     val mirrorQuality by vm.mirrorQuality.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    
+    val isConnected = session.status == AdbConnectionState.CONECTADO || session.status == AdbConnectionState.CONECTADO_WIFI
     
     Column(
         modifier = Modifier
@@ -67,6 +72,16 @@ fun ScrcpyScreen(vm: MainViewModel) {
                                         vm.desvincularSurfaceMirror()
                                     }
                                 })
+                                
+                                // NÍVEL 3 - Controle Remoto por Toque
+                                setOnTouchListener { view, event ->
+                                    if (event.action == MotionEvent.ACTION_DOWN) {
+                                        view.performClick()
+                                        // Enviamos o toque para o VM processar
+                                        vm.enviarToqueRemoto(event.x, event.y) 
+                                        true
+                                    } else false
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxSize()
@@ -92,7 +107,7 @@ fun ScrcpyScreen(vm: MainViewModel) {
                 modifier = Modifier.padding(20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StatusLed(if (isMirroring) AdbConnectionState.CONECTADO else AdbConnectionState.DESCONECTADO)
+                StatusLed(session.status)
                 Spacer(Modifier.width(16.dp))
                 Column {
                     Text(
@@ -100,7 +115,8 @@ fun ScrcpyScreen(vm: MainViewModel) {
                         fontWeight = FontWeight.Bold,
                         color = if (isMirroring) Color.Green else Color.Gray
                     )
-                    Text("Qualidade: ${mirrorQuality.label}", fontSize = 12.sp, color = Color.LightGray)
+                    Text("Device: ${session.device ?: "Nenhum"}", fontSize = 12.sp, color = Color.LightGray)
+                    Text("Qualidade: ${mirrorQuality.label}", fontSize = 11.sp, color = Color.Cyan)
                 }
             }
         }
@@ -113,7 +129,7 @@ fun ScrcpyScreen(vm: MainViewModel) {
                 onClick = { vm.startMirror(context) },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF004D40)),
-                enabled = !isMirroring
+                enabled = !isMirroring && isConnected
             ) {
                 Text("▶️ INICIAR ESPELHAMENTO", fontWeight = FontWeight.Black)
             }
@@ -178,8 +194,8 @@ fun ControleRemotoGrid(vm: MainViewModel) {
         item { ControleBtn("🔙", Icons.AutoMirrored.Filled.ArrowBack) { vm.sendAdbKey(KeyEvent.KEYCODE_BACK) } }
         item { ControleBtn("❌", Icons.Default.Close) { vm.sendAdbKey(KeyEvent.KEYCODE_APP_SWITCH) } }
         item { ControleBtn("📝", Icons.Default.Edit) { vm.runQuickCommand("input text ' '", "Espaço") } }
-        item { ControleBtn("🔍", Icons.Default.Search) { vm.sendAdbKey(KeyEvent.KEYCODE_SEARCH) } }
-        item { ControleBtn("📱", Icons.Default.PhoneAndroid) { vm.sendAdbKey(KeyEvent.KEYCODE_MENU) } }
+        item { ControleBtn("🔓", Icons.Default.LockOpen) { vm.blindUnlockAdvanced() } }
+        item { ControleBtn("📸", Icons.Default.Screenshot) { vm.takeScreenshot() } }
     }
 }
 

@@ -25,8 +25,11 @@ import com.rescuedroid.rescuedroid.model.ScriptLocal
 
 @Composable
 fun AutomationScreen(vm: MainViewModel) {
+    val session by vm.session.collectAsStateWithLifecycle()
     val scripts by vm.scriptsLocais.collectAsStateWithLifecycle()
     val isExecutando by vm.isExecutandoScript.collectAsStateWithLifecycle()
+    
+    val isConnected = session.isReady
 
     var showEditor by remember { mutableStateOf(false) }
     var editingScript by remember { mutableStateOf<ScriptLocal?>(null) }
@@ -56,7 +59,7 @@ fun AutomationScreen(vm: MainViewModel) {
 
         LazyColumn(Modifier.weight(1f)) {
             items(scripts) { script ->
-                ScriptItem(script, isExecutando, 
+                ScriptItem(script, isExecutando || !isConnected,
                     onRun = { vm.executarScript(script) },
                     onDelete = { vm.deletarScript(script) }
                 )

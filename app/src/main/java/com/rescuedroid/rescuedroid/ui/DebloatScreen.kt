@@ -26,16 +26,25 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.rescuedroid.rescuedroid.viewmodel.MainViewModel
 import com.rescuedroid.rescuedroid.RiskLevel
+import com.rescuedroid.rescuedroid.model.Action
 import com.rescuedroid.rescuedroid.model.AppInfo
 import com.rescuedroid.rescuedroid.components.DangerZoneDialog
 
 @Composable
 fun DebloatScreen(vm: MainViewModel) {
-    val isConnected by vm.isConnected.collectAsStateWithLifecycle()
+    val session by vm.session.collectAsStateWithLifecycle()
     val apps by vm.debloatApps.collectAsStateWithLifecycle()
     val isRefreshing by vm.isRefreshingApps.collectAsStateWithLifecycle()
     val filter by vm.debloatFilter.collectAsStateWithLifecycle()
     
+    val isConnected = session.isReady
+    
+    LaunchedEffect(isConnected) {
+        if (isConnected && apps.isEmpty()) {
+            vm.refreshDebloatApps()
+        }
+    }
+
     var showDangerDialog by remember { mutableStateOf<AppInfo?>(null) }
     var actionType by remember { mutableStateOf("") }
     var selectedRiskFilter by remember { mutableStateOf<RiskLevel?>(null) }
@@ -61,16 +70,32 @@ fun DebloatScreen(vm: MainViewModel) {
         }
 
         // BÔNUS: Botão IA Debloat Auto
-        Button(
-            onClick = { vm.debloatSeguroAutomatico() },
-            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF003333)),
-            border = BorderStroke(1.dp, Color.Cyan),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-        ) {
-            Icon(Icons.Default.AutoFixHigh, null, tint = Color.Cyan, modifier = Modifier.size(16.dp))
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Button(
+                onClick = { vm.debloatSeguroAutomatico() },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF003333)),
+                border = BorderStroke(1.dp, Color.Cyan),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.AutoFixHigh, null, tint = Color.Cyan, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("🤖 DEBLOAT IA AUTO", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            }
+            
             Spacer(Modifier.width(8.dp))
-            Text("🤖 DEBLOAT IA AUTO (SÓ SEGUROS)", color = Color.Cyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            
+            Button(
+                onClick = { vm.debloatSeguroAutomatico() },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF110000)),
+                border = BorderStroke(1.dp, Color.Red),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.CleaningServices, null, tint = Color.Red, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("💥 FAXINA TOTAL", color = Color.Red, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+            }
         }
         
         OutlinedTextField(
@@ -89,10 +114,11 @@ fun DebloatScreen(vm: MainViewModel) {
         // Filtros de Risco
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             RiskFilterChip("TODOS", null, Icons.Default.List, selectedRiskFilter == null) { selectedRiskFilter = null }
             RiskFilterChip("SEGURO", RiskLevel.SEGURO, Icons.Default.CheckCircle, selectedRiskFilter == RiskLevel.SEGURO) { selectedRiskFilter = RiskLevel.SEGURO }
+            RiskFilterChip("MODERADO", RiskLevel.MODERADO, Icons.Default.Info, selectedRiskFilter == RiskLevel.MODERADO) { selectedRiskFilter = RiskLevel.MODERADO }
             RiskFilterChip("PERIGOSO", RiskLevel.PERIGOSO, Icons.Default.Warning, selectedRiskFilter == RiskLevel.PERIGOSO) { selectedRiskFilter = RiskLevel.PERIGOSO }
             RiskFilterChip("CRÍTICO", RiskLevel.CRITICO, Icons.Default.Dangerous, selectedRiskFilter == RiskLevel.CRITICO) { selectedRiskFilter = RiskLevel.CRITICO }
         }
@@ -126,9 +152,10 @@ fun DebloatScreen(vm: MainViewModel) {
 @Composable
 fun RiskFilterChip(label: String, risk: RiskLevel?, icon: ImageVector, isSelected: Boolean, onClick: () -> Unit) {
     val color = when(risk) {
-        RiskLevel.SEGURO -> Color.Green
-        RiskLevel.PERIGOSO -> Color(0xFFFF4500)
-        RiskLevel.CRITICO -> Color.Red
+        RiskLevel.SEGURO -> Color(0xFF4CAF50)
+        RiskLevel.MODERADO -> Color.Gray
+        RiskLevel.PERIGOSO -> Color(0xFFFF9800)
+        RiskLevel.CRITICO -> Color(0xFFF44336)
         else -> Color.Cyan
     }
     
@@ -157,7 +184,12 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
             .padding(vertical = 4.dp)
             .animateContentSize(), // ✨ ANIMAÇÃO SUAVE
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
-        border = BorderStroke(1.dp, if (app.risk == RiskLevel.CRITICO) Color.Red else if (app.risk == RiskLevel.PERIGOSO) Color(0xFFFF4500) else Color(0xFF222222))
+        border = BorderStroke(1.dp, when(app.risk) {
+            RiskLevel.CRITICO -> Color(0xFFF44336)
+            RiskLevel.PERIGOSO -> Color(0xFFFF9800)
+            RiskLevel.MODERADO -> Color.DarkGray
+            else -> Color(0xFF222222)
+        })
     ) {
         Column {
             Row(
@@ -167,6 +199,19 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Ícone do App (Luxo!)
+                if (app.icon != null) {
+                    androidx.compose.foundation.Image(
+                        painter = com.google.accompanist.drawablepainter.rememberDrawablePainter(app.icon),
+                        contentDescription = null,
+                        modifier = Modifier.size(40.dp).padding(end = 12.dp)
+                    )
+                } else {
+                    Box(Modifier.size(40.dp).padding(end = 12.dp), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Android, null, tint = Color.DarkGray)
+                    }
+                }
+
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(app.label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
@@ -190,12 +235,17 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         if (app.riskReason.isNotEmpty()) {
-                            Text("Risco: ${app.riskReason}", color = Color.Cyan, fontSize = 11.sp)
+                            Text("🔍 Análise: ${app.riskReason}", color = Color.Cyan, fontSize = 11.sp)
                         }
-                        if (app.acaoSugerida.isNotEmpty()) {
-                            Text("Sugestão: ${app.acaoSugerida}", color = Color.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        if (app.recommendedAction != Action.KEEP) {
+                            val actionText = when(app.recommendedAction) {
+                                Action.UNINSTALL -> "Desinstalação Sugerida"
+                                Action.DISABLE -> "Desativação Recomendada"
+                                else -> "Manter"
+                            }
+                            Text("💡 $actionText", color = Color.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
-                        Text("Caminho: /system/app/${app.label}", color = Color.Gray, fontSize = 10.sp)
+                        Text("🛠️ Tipo: ${if (app.isSystem) "Sistema" else "Usuário"}", color = Color.Gray, fontSize = 10.sp)
                     }
                 }
             }
@@ -206,9 +256,10 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
 @Composable
 fun RiskBadge(risk: RiskLevel) {
     val cor = when(risk) {
-        RiskLevel.SEGURO -> Color.Green
-        RiskLevel.PERIGOSO -> Color(0xFFFF4500)
-        RiskLevel.CRITICO -> Color.Red
+        RiskLevel.SEGURO -> Color(0xFF4CAF50)
+        RiskLevel.MODERADO -> Color.Gray
+        RiskLevel.PERIGOSO -> Color(0xFFFF9800)
+        RiskLevel.CRITICO -> Color(0xFFF44336)
     }
     
     Box(
@@ -219,7 +270,7 @@ fun RiskBadge(risk: RiskLevel) {
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(
-            text = when(risk) { RiskLevel.SEGURO -> "SEGURO"; RiskLevel.PERIGOSO -> "PERIGOSO"; else -> "CRÍTICO" },
+            text = risk.name,
             color = cor,
             fontSize = 8.sp,
             fontWeight = FontWeight.Black

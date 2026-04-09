@@ -24,7 +24,13 @@ object IAEscuta {
             cmd.contains("screenshot") || cmd.contains("print") -> IACmd.Screenshot
             cmd.contains("desbloqueia") || cmd.contains("desbloquear") -> IACmd.Unlock
             cmd.contains("tela ligada") || cmd.contains("sempre on") -> IACmd.ScreenTimeout
-            cmd.contains("idoso") || cmd.contains("modo idoso") || cmd.contains("fácil") -> IACmd.SeniorMode
+            cmd.contains("idoso") || cmd.contains("modo idoso") || cmd.contains("fácil") -> {
+                if (cmd.contains("desativa") || cmd.contains("para") || cmd.contains("tira") || cmd.contains("reset")) {
+                    IACmd.DisableSeniorMode
+                } else {
+                    IACmd.SeniorMode
+                }
+            }
             
             // HACKER
             cmd.contains("hacker") || cmd.contains("modo hacker") -> IACmd.ToggleHacker
@@ -59,6 +65,7 @@ sealed class IACmd {
     object Unlock : IACmd()
     object ScreenTimeout : IACmd()
     object SeniorMode : IACmd()
+    object DisableSeniorMode : IACmd()
     object ToggleHacker : IACmd()
     object ResetAdbKeys : IACmd()
 }

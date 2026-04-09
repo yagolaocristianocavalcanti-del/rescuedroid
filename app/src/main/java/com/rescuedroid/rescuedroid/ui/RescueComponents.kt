@@ -49,10 +49,16 @@ fun SectionHeader(title: String) {
 
 @Composable
 fun BlueActionButton(text: String, onClick: () -> Unit) {
+    val color = when {
+        text.contains("REPARO") -> Color(0xFF00796B)
+        text.contains("CACHE") -> Color(0xFF455A64)
+        text.contains("UNLOCK") -> Color(0xFFE65100)
+        else -> Color(0xFF0D47A1)
+    }
     Button(
         onClick = onClick,
         modifier = Modifier.height(34.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D47A1)),
+        colors = ButtonDefaults.buttonColors(containerColor = color),
         shape = RoundedCornerShape(4.dp),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
     ) {

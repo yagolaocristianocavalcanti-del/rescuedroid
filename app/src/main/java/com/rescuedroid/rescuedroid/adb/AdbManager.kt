@@ -258,6 +258,35 @@ object AdbManager {
         }
     }
 
+    /**
+     * Recebe um arquivo do dispositivo remoto.
+     * Usa 'exec:cat' para ler o conteúdo.
+     */
+    suspend fun pullFile(
+        remotePath: String,
+        target: AdbConnection? = activeConnection
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        val conn = target ?: return@withContext null
+        try {
+            Log.d(TAG, "Iniciando pull de $remotePath")
+            val stream: AdbStream = conn.open("exec:cat \"$remotePath\"")
+            val output = java.io.ByteArrayOutputStream()
+            
+            while (!stream.isClosed()) {
+                val payload = try { stream.read() } catch (e: Exception) { null }
+                if (payload == null) break
+                output.write(payload)
+            }
+            
+            stream.close()
+            Log.d(TAG, "Pull concluído: ${output.size()} bytes")
+            output.toByteArray()
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao fazer pull: ${e.message}")
+            null
+        }
+    }
+
     fun disconnect() {
         disconnectWifi()
         disconnectUsb()
@@ -318,6 +347,12 @@ object AdbManager {
     suspend fun execute(command: String, device: AdbDevice?): String {
         val conn = device?.connection ?: activeConnection
         return executeCommand(command, target = conn)
+    }
+
+    fun isFastbootMode(): Boolean {
+        // Para uma aplicação real de Android resgate, usaríamos USB enumeration
+        // Aqui simulamos detecção simples baseada no estado do USB
+        return false
     }
 
     suspend fun listDevices(context: Context): List<AdbDevice> = withContext(Dispatchers.IO) {

@@ -3,6 +3,10 @@ package com.rescuedroid.rescuedroid.model
 import android.graphics.drawable.Drawable
 import com.rescuedroid.rescuedroid.RiskLevel
 
+enum class Action {
+    KEEP, DISABLE, UNINSTALL
+}
+
 data class AppInfo(
     val packageName: String,
     val label: String,
@@ -11,7 +15,9 @@ data class AppInfo(
     val risk: RiskLevel,
     val riskScore: Int,
     val riskReason: String,
-    val acaoSugerida: String = ""
+    val isSystem: Boolean = false,
+    val recommendedAction: Action = Action.KEEP,
+    val acaoSugerida: String = "" // Mantido por compatibilidade
 )
 
 data class FastbootVar(val name: String, val value: String)

@@ -34,13 +34,17 @@ import com.rescuedroid.rescuedroid.viewmodel.AdbConnectionState
 import com.rescuedroid.rescuedroid.viewmodel.AppScreen
 
 @Composable
-fun AdbRescueScreen(vm: MainViewModel, isConnected: Boolean, isConnecting: Boolean) {
+fun AdbRescueScreen(vm: MainViewModel) {
+    val session by vm.session.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
     val manualIp by vm.manualIp.collectAsStateWithLifecycle()
     val manualPort by vm.manualPort.collectAsStateWithLifecycle()
     val pairingCode by vm.pairingCode.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val usbMode by vm.usbMode.collectAsStateWithLifecycle()
+    
+    val isConnected = session.isReady
+    val isConnecting = session.status == AdbConnectionState.CONECTANDO
     
     val dispositivos by vm.dispositivos.collectAsStateWithLifecycle()
     val selecionado by vm.dispositivoSelecionado.collectAsStateWithLifecycle()
@@ -223,7 +227,9 @@ fun ContextualQuickActions(vm: MainViewModel) {
     ) {
         BlueActionButton("🎁 APPS") { vm.runQuickCommand("pm list packages", "Listar Apps") }
         BlueActionButton("🔋 BATERIA") { vm.runQuickCommand("dumpsys battery", "Bateria") }
-        BlueActionButton("ℹ️ VERSÃO") { vm.runQuickCommand("getprop ro.build.version.release", "Android") }
+        BlueActionButton("🛠️ REPARO") { vm.fixSystemPermissions() }
+        BlueActionButton("🧹 CACHE") { vm.limparCacheGeral() }
+        BlueActionButton("🔓 UNLOCK") { vm.blindUnlockAdvanced() }
         BlueActionButton("📱 TELA") { vm.runQuickCommand("wm size", "Tela") }
         BlueActionButton("🔍 PROCESSOS") { vm.runQuickCommand("ps", "Processos") }
         BlueActionButton("☁️ IP") { vm.runQuickCommand("ip addr show wlan0", "IP") }

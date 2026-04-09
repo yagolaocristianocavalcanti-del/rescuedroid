@@ -69,22 +69,26 @@ class DebloatRiskEngine @Inject constructor() {
     fun check(pkg: String): Analysis {
         val p = pkg.lowercase()
         return when {
-            APPS_CRITICOS.any { p.contains(it) } -> 
-                Analysis(RiskLevel.CRITICO, "🚨 APP ESSENCIAL DO SISTEMA", 0, "NÃO TOCAR!")
+            // NÍVEL 2 — IA DE DEBLOAT (Regras de Ouro)
+            APPS_CRITICOS.any { p.contains(it) } || p.contains("systemui") -> 
+                Analysis(RiskLevel.CRITICO, "🛑 CRÍTICO DO SISTEMA (NÃO MEXER)", 0, "PROTEGIDO")
             
-            BLOATWARE_CONHECIDO.any { p.contains(it) } -> 
-                Analysis(RiskLevel.SEGURO, "🗑️ BLOATWARE CONHECIDO", 95, "REMOVER!")
-            
-            p.contains("service") || p.contains("framework") -> 
-                Analysis(RiskLevel.PERIGOSO, "⚠️ SERVIÇO INTERNO", 30, "DESATIVAR")
-            
-            p.contains("google") && !p.contains("vending") && !p.contains("play.games") -> 
-                Analysis(RiskLevel.SEGURO, "✅ GOOGLE OPCIONAL", 60, "PODE DESATIVAR")
+            p.contains("miui") || p.contains("samsung.android") && p.contains("framework") ->
+                Analysis(RiskLevel.PERIGOSO, "⚠️ COMPONENTE DE INTERFACE (PODE TRAVAR)", 20, "CUIDADO")
 
-            p.contains("carrier") || p.contains("telephony") ->
-                Analysis(RiskLevel.PERIGOSO, "📡 SERVIÇO DE OPERADORA", 40, "CUIDADO")
+            BLOATWARE_CONHECIDO.any { p.contains(it) } || p.contains("facebook") || p.contains("instagram") -> 
+                Analysis(RiskLevel.SEGURO, "🗑️ BLOATWARE/TRACKER CONHECIDO", 95, "REMOVER")
             
-            else -> Analysis(RiskLevel.PERIGOSO, "❓ DESCONHECIDO", 50, "ANALISAR")
+            p.contains("google") && (p.contains("music") || p.contains("videos") || p.contains("magazines")) ->
+                Analysis(RiskLevel.SEGURO, "✅ APP GOOGLE OPCIONAL", 80, "REMOVER")
+
+            p.contains("service") || p.contains("framework") -> 
+                Analysis(RiskLevel.MODERADO, "⚙️ SERVIÇO EM SEGUNDO PLANO", 40, "DESATIVAR")
+
+            p.contains("carrier") || p.contains("telephony") || p.contains("overlay") ->
+                Analysis(RiskLevel.PERIGOSO, "📡 MODIFICAÇÃO DE OPERADORA/UI", 30, "RISCO MÉDIO")
+            
+            else -> Analysis(RiskLevel.MODERADO, "❓ DESCONHECIDO (NECESSITA ANÁLISE)", 50, "PESQUISAR")
         }
     }
 }

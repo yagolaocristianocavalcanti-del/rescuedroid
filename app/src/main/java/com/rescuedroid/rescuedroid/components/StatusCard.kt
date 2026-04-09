@@ -21,10 +21,10 @@ import com.rescuedroid.rescuedroid.viewmodel.MainViewModel
 import com.rescuedroid.rescuedroid.viewmodel.AdbConnectionState
 
 @Composable
-fun StatusCard(vm: MainViewModel, isConnected: Boolean, isConnecting: Boolean) {
-    val model by vm.deviceModel.collectAsStateWithLifecycle()
-    val connState by vm.adbConnectionState.collectAsStateWithLifecycle()
+fun StatusCard(vm: MainViewModel) {
+    val session by vm.session.collectAsStateWithLifecycle()
     val isHackerMode by vm.isHackerMode.collectAsStateWithLifecycle()
+    val isConnected = session.isReady
 
     Card(
         modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -35,8 +35,8 @@ fun StatusCard(vm: MainViewModel, isConnected: Boolean, isConnecting: Boolean) {
             Box(Modifier.size(12.dp).background(if (isConnected) Color.Cyan else Color.Red, CircleShape))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(if (isConnected) model else "DISPOSITIVO DESCONECTADO", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Text(connState.name, color = Color.Gray, fontSize = 10.sp)
+                Text(if (isConnected) (session.device ?: "MODELO") else "DISPOSITIVO DESCONECTADO", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(session.status.name, color = Color.Gray, fontSize = 10.sp)
             }
             IconButton(onClick = { vm.toggleHackerMode() }) {
                 Icon(Icons.Default.Terminal, null, tint = if (isHackerMode) Color.Green else Color.Gray)

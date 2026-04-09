@@ -58,11 +58,8 @@ data class NavScreen(
 fun MainContent(vm: MainViewModel) {
     val context = LocalContext.current
     val currentScreen by vm.currentScreen.collectAsStateWithLifecycle()
-    val isConnected by vm.isConnected.collectAsStateWithLifecycle()
-    val adbState by vm.adbConnectionState.collectAsStateWithLifecycle()
     val isHackerMode by vm.isHackerMode.collectAsStateWithLifecycle()
     val isSupportOpen by vm.isSupportOpen.collectAsStateWithLifecycle()
-    val isConnecting = adbState == AdbConnectionState.CONECTANDO
 
     LaunchedEffect(Unit) {
         vm.startDeviceMonitoring(context)
@@ -107,11 +104,11 @@ fun MainContent(vm: MainViewModel) {
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize().background(Color.Black)) {
             Column {
-                StatusCard(vm, isConnected, isConnecting)
+                StatusCard(vm)
                 
                 Crossfade(targetState = currentScreen, label = "ScreenTransition") { screen ->
                     when (screen) {
-                        AppScreen.ADB_RESCUE -> AdbRescueScreen(vm, isConnected, isConnecting)
+                        AppScreen.ADB_RESCUE -> AdbRescueScreen(vm)
                         AppScreen.SCRCPY -> ScrcpyScreen(vm)
                         AppScreen.FILE_MANAGER -> FileManagerScreen(vm)
                         AppScreen.LOGCAT -> LogcatScreen(vm)

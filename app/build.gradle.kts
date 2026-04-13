@@ -16,7 +16,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = 3
-        versionName = "2.1-LUXO"
+        versionName = "2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -81,6 +81,9 @@ dependencies {
 
     // Removida a biblioteca tananaev para usar apenas a local com cgutman e evitar conflitos de AdbCrypto
     // implementation(libs.tananaev.adblib)
+
+    // MediaPipe GenAI (Gemma)
+    implementation("com.google.mediapipe:tasks-genai:0.10.33")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -199,7 +199,7 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Ícone do App (Luxo!)
+                // Ícone do App
                 if (app.icon != null) {
                     androidx.compose.foundation.Image(
                         painter = com.google.accompanist.drawablepainter.rememberDrawablePainter(app.icon),

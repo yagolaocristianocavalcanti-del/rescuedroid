@@ -248,7 +248,7 @@ class MirrorActivity : ComponentActivity() {
                     var lastUpdate = System.currentTimeMillis()
                     val packetBuffer = ByteArray(1024 * 1024)
                     var packetSize = 0
-                    val bitrate = "${scrcpyTool.currentQuality.bitRate / 1_000_000}Mbps"
+                    val bitrate = scrcpyTool.currentQuality.bitRate
 
                     while (isActive && !activeStream.isClosed) {
                         val data = try { activeStream.read() } catch (e: Exception) { null } ?: break

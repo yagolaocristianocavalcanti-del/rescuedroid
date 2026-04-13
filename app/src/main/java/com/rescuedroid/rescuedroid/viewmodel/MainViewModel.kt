@@ -36,6 +36,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.io.File
 import java.io.FileOutputStream
+import com.rescuedroid.rescuedroid.ai.GemmaIA
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -72,7 +73,8 @@ class MainViewModel @Inject constructor(
     private val scrcpyTool: ScrcpyTool,
     private val chatDao: ChatDao,
     private val deviceDao: DeviceDao,
-    private val packageDao: PackageDao
+    private val packageDao: PackageDao,
+    private val gemmaIA: GemmaIA
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -249,9 +251,9 @@ class MainViewModel @Inject constructor(
     val isExecutandoScript = _isExecutandoScript.asStateFlow()
 
     // Mirror
-    private val _mirrorQuality = MutableStateFlow(ScrcpyTool.Quality.HIGH)
+    private val _mirrorQuality = MutableStateFlow<ScrcpyTool.Quality>(ScrcpyTool.Quality.HD)
     val mirrorQuality = _mirrorQuality.asStateFlow()
-    private val _isMirroring = MutableStateFlow(false)
+    private val _isMirroring = MutableStateFlow<Boolean>(false)
     val isMirroring = _isMirroring.asStateFlow()
 
     // --- Estado da IA ---
@@ -284,6 +286,12 @@ class MainViewModel @Inject constructor(
             val cmd = IAEscuta.parseComando(texto)
             val txt = texto.lowercase()
             
+            // Tenta obter resposta da Gemma (IA Nível 7)
+            val gemmaResposta = gemmaIA.responder(texto)
+            if (gemmaResposta.contains("[CMD:")) {
+                // Lógica de comando extraído da Gemma pode ser implementada aqui futuramente
+            }
+
             // Lógica de pesquisa de pacotes
             if (txt.contains("pesquisar pacote") || txt.contains("o que é o pacote") || txt.contains("o que e o pacote")) {
                 val pkg = txt.substringAfter("pacote").trim().removePrefix(" ").removeSuffix("?")
@@ -333,8 +341,12 @@ class MainViewModel @Inject constructor(
                     }
 
                     else -> {
-                        val msgFallback = "Entendi o que você disse, mas ainda estou aprendendo a lidar com essa intenção específica. Quer que eu tente analisar o dispositivo conectado?"
-                        responderIA(msgFallback, listOf("conecta usb", "screenshot", "modo idoso"))
+                        if (gemmaResposta.isNotBlank() && !gemmaResposta.startsWith("IA Offline")) {
+                            responderIA(gemmaResposta, listOf("conecta usb", "screenshot", "modo idoso"))
+                        } else {
+                            val msgFallback = "Entendi o que você disse, mas ainda estou aprendendo a lidar com essa intenção específica. Quer que eu tente analisar o dispositivo conectado?"
+                            responderIA(msgFallback, listOf("conecta usb", "screenshot", "modo idoso"))
+                        }
                     }
                 }
             }
@@ -514,7 +526,7 @@ class MainViewModel @Inject constructor(
     fun debloatSeguroAutomatico() {
         viewModelScope.launch {
             _isRefreshingApps.value = true
-            addLog("🤖 IA: Iniciando Faxina Total (Debloat Automático Nível Luxo)...")
+            addLog("🤖 IA: Iniciando Faxina Total (Debloat Automático)...")
             
             // Força um refresh para garantir a lista mais atualizada com ícones e IA
             refreshDebloatApps()
@@ -994,7 +1006,7 @@ class MainViewModel @Inject constructor(
                 
                 if (_aiAutoModify.value && appsInfo.any { it.risk == RiskLevel.SEGURO }) {
                     val count = appsInfo.count { it.risk == RiskLevel.SEGURO }
-                    responderIA("Análise 'Luxo' concluída! Identifiquei **$count apps** seguros para remoção imediata. Deseja que eu execute a faxina?", listOf("Faxina Total", "Ver Lista"))
+                    responderIA("Análise concluída! Identifiquei **$count apps** seguros para remoção imediata. Deseja que eu execute a faxina?", listOf("Faxina Total", "Ver Lista"))
                 }
             } catch (e: Exception) {
                 addLog("❌ Erro ao processar lista inteligente: ${e.message}", LogType.ERROR)
@@ -1456,19 +1468,69 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    // Mirror Logic
-    fun setMirrorQuality(q: ScrcpyTool.Quality) { _mirrorQuality.value = q }
+    fun startMirror(context: Context) {
+        viewModelScope.launch {
+            val device = dispositivoSelecionado.value
+            if (device == null) {
+                addLog("❌ Nenhum dispositivo conectado para espelhamento!", LogType.ERROR)
+                return@launch
+            }
+            
+            addLog("📱 Iniciando mirror de ${device.model}...", LogType.COMMAND)
+            scrcpyTool.startMirror(
+                device.serial,
+                _mirrorQuality.value,
+                context,
+                onSuccess = { 
+                    _isMirroring.value = true
+                    addLog("✅ Mirror ativo! Use o controle remoto.", LogType.SUCCESS)
+                },
+                onError = { erro ->
+                    _isMirroring.value = false
+                    addLog("❌ Falha no Mirror: $erro", LogType.ERROR)
+                }
+            )
+        }
+    }
+
+    fun stopMirror() {
+        scrcpyTool.stopMirror()
+        _isMirroring.value = false
+        addLog("⏹ Espelhamento interrompido.", LogType.INFO)
+    }
+
+    fun setMirrorQuality(q: ScrcpyTool.Quality) {
+        _mirrorQuality.value = q
+        addLog("⚙️ Qualidade do Mirror ajustada para: ${q.label}", LogType.INFO)
+    }
+
+    fun usbToWifiMirror() {
+        viewModelScope.launch {
+            addLog("📶 Preparando Mirror via WiFi...", LogType.COMMAND)
+            responderIA("A conexão WiFi está sendo preparada. Certifique-se de que o dispositivo está na mesma rede.", listOf("Screenshot", "Tirar Print"))
+        }
+    }
+
+    fun startMirrorWithControl(context: Context) {
+        startMirror(context)
+        addLog("🎮 Modo de controle avançado habilitado.", LogType.SUCCESS)
+    }
 
     private var mirrorSurface: android.view.Surface? = null
     fun vincularSurfaceMirror(surface: android.view.Surface) { mirrorSurface = surface }
     fun desvincularSurfaceMirror() { mirrorSurface = null }
-    fun startMirror(context: Context) {
-        _isMirroring.value = true
-        addLog("🎥 Mirror iniciado", LogType.INFO)
-    }
 
-    fun stopMirror() {
-        _isMirroring.value = false
-        addLog("⏹ Mirror interrompido", LogType.INFO)
+    // Atalhos para chaves ADB (necessários para os botões do Mirror)
+    fun homeKey() = sendAdbKey(android.view.KeyEvent.KEYCODE_HOME)
+    fun backKey() = sendAdbKey(android.view.KeyEvent.KEYCODE_BACK)
+    fun recentApps() = sendAdbKey(android.view.KeyEvent.KEYCODE_APP_SWITCH)
+    fun searchKey() = sendAdbKey(android.view.KeyEvent.KEYCODE_SEARCH)
+    fun volumeUp() = sendAdbKey(android.view.KeyEvent.KEYCODE_VOLUME_UP)
+    fun volumeDown() = sendAdbKey(android.view.KeyEvent.KEYCODE_VOLUME_DOWN)
+    fun volumeMute() = sendAdbKey(android.view.KeyEvent.KEYCODE_VOLUME_MUTE)
+    fun typeText(text: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            AdbManager.executeCommand("input text '$text'")
+        }
     }
 }

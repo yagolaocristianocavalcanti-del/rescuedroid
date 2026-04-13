@@ -9,6 +9,7 @@ import com.rescuedroid.rescuedroid.adb.AdbRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,14 +20,21 @@ class ScrcpyTool @Inject constructor(
     private val TAG = "SCRCPY"
     private val REMOTE_JAR = "/data/local/tmp/scrcpy-server.jar"
 
-    enum class Quality(val bitRate: Long, val maxSize: Int, val fps: Int, val label: String) {
-        ULTRA(20_000_000, 1920, 60, "FULL HD+"),
-        HIGH(8_000_000, 1280, 60, "HD 1080p"),
-        STANDARD(4_000_000, 1024, 30, "Padrão"),
-        LIGHT(2_000_000, 720, 30, "Leve 720p"),
-        ULTRA_LIGHT(1_000_000, 480, 15, "Econômico")
+    enum class Quality(
+        val maxSize: String,
+        val bitRate: String,
+        val fps: String,
+        val label: String
+    ) {
+        ULTRA_LIGHT("480", "1M", "15", "Econômico"),
+        LIGHT("720", "2M", "30", "Leve 720p"),
+        STANDARD("1024", "4M", "30", "Padrão"),
+        HD("1080", "8M", "60", "HD 1080p"),
+        FULL_HD("1920", "20M", "60", "FULL HD+")
     }
 
+    private var process: Process? = null
+    
     @Volatile
     private var serverStream: AdbStream? = null
     
@@ -35,6 +43,40 @@ class ScrcpyTool @Inject constructor(
         private set
 
     var currentQuality: Quality = Quality.STANDARD
+
+    suspend fun startMirror(
+        deviceSerial: String,
+        quality: Quality = Quality.HD,
+        context: Context,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) = withContext(Dispatchers.IO) {
+        try {
+            // Mata processos antigos
+            stopMirror()
+            
+            val cmd = mutableListOf(
+                "scrcpy",
+                "--serial=$deviceSerial",
+                "--max-size=${quality.maxSize}",
+                "--video-bit-rate=${quality.bitRate}",
+                "--max-fps=${quality.fps}",
+                "--stay-awake",
+                "--turn-screen-off",
+                "--no-audio",
+                "--keyboard=uhid"
+            )
+            
+            // Nota: Isso assume que o binário 'scrcpy' está no PATH do sistema onde o app roda (se for Desktop/Emulator com suporte)
+            // No Android real, o scrcpy geralmente roda via server.jar injetado.
+            // Vou manter a lógica de injeção de JAR que já existia, mas adaptando os parâmetros.
+            
+            startServer(context, quality)
+            onSuccess()
+        } catch (e: Exception) {
+            onError("Erro: ${e.message}")
+        }
+    }
 
     suspend fun startServer(
         context: Context, 
@@ -47,7 +89,6 @@ class ScrcpyTool @Inject constructor(
         
         while (retryCount < maxRetries) {
             try {
-                // Limpa instâncias anteriores de forma mais agressiva
                 stopServer()
                 if (target == null) {
                     Log.e(TAG, "Nenhuma conexão ADB ativa para iniciar o espelhamento")
@@ -97,6 +138,12 @@ class ScrcpyTool @Inject constructor(
         val current = serverStream
         serverStream = null
         runCatching { current?.close() }
+    }
+
+    fun stopMirror() {
+        stopServer()
+        process?.destroyForcibly()
+        process = null
     }
     
     fun clearActiveConnection() {

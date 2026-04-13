@@ -1,5 +1,7 @@
 package com.rescuedroid.rescuedroid.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -30,8 +32,13 @@ fun SettingsScreen(vm: MainViewModel) {
     val aiAutoModify by vm.aiAutoModify.collectAsStateWithLifecycle()
     val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
     val isIAReady by vm.isIAReady.collectAsStateWithLifecycle()
-    val isIADownloading by vm.isIADownloading.collectAsStateWithLifecycle()
-    val iaDownloadProgress by vm.iaDownloadProgress.collectAsStateWithLifecycle()
+    val iaStatusMessage by vm.iaStatusMessage.collectAsStateWithLifecycle()
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { vm.importIAModel(it) }
+    }
     
     Column(
         modifier = Modifier
@@ -90,34 +97,34 @@ fun SettingsScreen(vm: MainViewModel) {
                 Spacer(modifier = Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Motor Local (Gemma)", color = Color.White, style = MaterialTheme.typography.bodyLarge)
-                    val statusText = when {
-                        isIADownloading -> {
-                            val percent = (iaDownloadProgress * 100).toInt()
-                            "Baixando arquivos do modelo (270MB)... $percent%"
-                        }
-                        isIAReady -> "IA Pronta e Operacional"
-                        else -> "Aguardando inicialização..."
-                    }
-                    Text(statusText, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                    Text(iaStatusMessage, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
                     
-                    if (isIADownloading) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        LinearProgressIndicator(
-                            progress = { iaDownloadProgress },
-                            modifier = Modifier.fillMaxWidth().height(4.dp),
-                            color = Color.Cyan,
-                            trackColor = Color.DarkGray,
-                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
-                        )
+                    if (!isIAReady) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { vm.checkIAModelManual() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("Auto-Verificar", color = Color.Cyan, style = MaterialTheme.typography.labelMedium)
+                            }
+
+                            Button(
+                                onClick = { filePickerLauncher.launch("*/*") },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("Selecionar Arquivo", color = Color.Cyan, style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
                     }
                 }
                 
                 // LED Indicativo
-                val ledColor = when {
-                    isIADownloading -> Color.Yellow
-                    isIAReady -> Color.Green
-                    else -> Color.Red
-                }
+                val ledColor = if (isIAReady) Color.Green else Color.Red
                 
                 Box(
                     modifier = Modifier

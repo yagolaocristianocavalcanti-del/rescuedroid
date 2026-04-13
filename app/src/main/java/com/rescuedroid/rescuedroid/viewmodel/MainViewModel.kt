@@ -11,6 +11,7 @@ import android.os.VibratorManager
 import android.speech.RecognizerIntent
 import com.rescuedroid.rescuedroid.ai.IACmd
 import com.rescuedroid.rescuedroid.ai.IAEscuta
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rescuedroid.rescuedroid.adb.AdbManager
@@ -235,8 +236,7 @@ class MainViewModel @Inject constructor(
 
     // IA Status
     val isIAReady = gemmaIA.isReady
-    val isIADownloading = gemmaIA.isDownloading
-    val iaDownloadProgress = gemmaIA.downloadProgress
+    val iaStatusMessage = gemmaIA.statusMessage
 
     // Logcat
     private val _logcatEntries = MutableStateFlow<List<LogEntry>>(emptyList())
@@ -276,6 +276,14 @@ class MainViewModel @Inject constructor(
         val sugestoes: List<String> = emptyList(),
         val timestamp: Long = System.currentTimeMillis()
     )
+
+    fun checkIAModelManual() {
+        gemmaIA.checkModelManual()
+    }
+
+    fun importIAModel(uri: Uri) {
+        gemmaIA.importModelFromUri(uri)
+    }
 
     fun processarComandoIA(texto: String) {
         viewModelScope.launch {
@@ -422,25 +430,25 @@ class MainViewModel @Inject constructor(
                 return@launch
             }
 
-            responderIA("Iniciando varredura inteligente na sua lista de apps instalados. Vou identificar pacotes suspeitos via Web...", listOf())
+            responderIA("Iniciando varredura inteligente local... Vou identificar pacotes suspeitos usando meu motor local.", listOf())
             
-            // Filtra o que a IA ainda não conhece ou que o motor local marcou como perigoso/incerto
             val suspeitos = listaAtual.filter { 
-                it.risk == RiskLevel.DANGEROUS || it.reason.contains("desconhecido", ignoreCase = true) 
-            }.take(10) // Processamos em lotes de 10 para segurança
+                it.risk == RiskLevel.DANGEROUS || it.risk == RiskLevel.CRITICAL || it.reason.contains("desconhecido", ignoreCase = true) 
+            }.take(5) 
 
             if (suspeitos.isEmpty()) {
-                responderIA("Varredura concluída! Todos os apps na lista já são conhecidos ou seguros. Nada suspeito por aqui. 😎", listOf("Limpar Lixo", "Voltar"))
+                responderIA("Varredura concluída! Não encontrei nada muito crítico que eu já não conheça. 😎", listOf("Limpar Lixo", "Voltar"))
                 return@launch
             }
 
             suspeitos.forEach { app ->
-                pesquisarPacoteWeb(app.packageName, notificarChat = false)
+                val analiseIA = gemmaIA.analisarApp(app.packageName)
+                // Aqui poderíamos parsear a resposta da IA para atualizar o RiskLevel no BD, 
+                // por enquanto vamos apenas registrar no chat como prometido pelo usuário
+                responderIA("🔍 Análise de **${app.packageName}**:\n$analiseIA", listOf())
             }
             
-            refreshDebloatApps() // Atualiza a UI com os novos dados do cache
-            
-            responderIA("Terminei! Analisei os pacotes suspeitos e atualizei as tags de risco na sua lista de Debloat. Dá uma olhada lá!", listOf("Ver Lista Atualizada", "Remover Recomendados"))
+            responderIA("Terminei a análise local dos pacotes mais críticos!", listOf("Ver Lista", "Remover Recomendados"))
         }
     }
 

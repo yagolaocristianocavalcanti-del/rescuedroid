@@ -10,14 +10,10 @@ enum class Action {
 data class AppInfo(
     val packageName: String,
     val label: String,
-    val icon: Drawable? = null,
-    val isBloat: Boolean,
+    val icon: Drawable?,
     val risk: RiskLevel,
-    val riskScore: Int,
-    val riskReason: String,
-    val isSystem: Boolean = false,
-    val recommendedAction: Action = Action.KEEP,
-    val acaoSugerida: String = "" // Mantido por compatibilidade
+    val reason: String,
+    val suggestedAction: Action
 )
 
 data class FastbootVar(val name: String, val value: String)

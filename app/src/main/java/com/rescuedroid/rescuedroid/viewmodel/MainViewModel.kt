@@ -29,8 +29,10 @@ import com.rescuedroid.rescuedroid.data.local.ChatDao
 import com.rescuedroid.rescuedroid.data.local.ChatMessage
 import com.rescuedroid.rescuedroid.data.local.DeviceDao
 import com.rescuedroid.rescuedroid.data.local.KnownDevice
-import com.rescuedroid.rescuedroid.data.local.PackageDao
 import com.rescuedroid.rescuedroid.data.local.PackageCache
+import com.rescuedroid.rescuedroid.data.local.PackageDao
+import com.rescuedroid.rescuedroid.debloat.DebloatEngine
+import android.graphics.drawable.Drawable
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
@@ -231,6 +233,11 @@ class MainViewModel @Inject constructor(
     private val _downloadFolderUri = MutableStateFlow<android.net.Uri?>(null)
     val downloadFolderUri = _downloadFolderUri.asStateFlow()
 
+    // IA Status
+    val isIAReady = gemmaIA.isReady
+    val isIADownloading = gemmaIA.isDownloading
+    val iaDownloadProgress = gemmaIA.downloadProgress
+
     // Logcat
     private val _logcatEntries = MutableStateFlow<List<LogEntry>>(emptyList())
     val logcatEntries = _logcatEntries.asStateFlow()
@@ -306,7 +313,7 @@ class MainViewModel @Inject constructor(
                     cmd != null -> executarComandoMapeado(cmd)
                     
                     txt.contains("quem é você") || txt.contains("quem e voce") || txt.contains("voce e o que") -> 
-                        responderIA("Eu sou a **PicoClaw**, a inteligência por trás do RescueDroid. Meu trabalho é garantir que nenhum celular morra na sua mão! Consigo automatizar comandos ADB, limpar lixos e até consertar telas quebradas via espelhamento.", listOf("conecta usb", "modo idoso"))
+                        responderIA("Eu sou a inteligência artificial por trás do RescueDroid. Meu trabalho é garantir que nenhum celular morra na sua mão! Consigo automatizar comandos ADB, limpar lixos e até consertar telas quebradas via espelhamento.", listOf("conecta usb", "modo idoso"))
                     
                     txt.contains("ajuda") || txt.contains("preciso de ajuda") || txt.contains("socorro") ->
                         responderIA("Calma, estou aqui! 🐾 Posso tentar: \n1. **Conectar USB** (Modo Turbo)\n2. **Tirar Print** da tela\n3. **Reparar Sistema** (Otimização)\n4. **Limpar Cache** (Deep Clean)\nQual é a emergência?", listOf("conecta usb", "Reparar Sistema", "Limpar Cache"))
@@ -323,7 +330,7 @@ class MainViewModel @Inject constructor(
                         responderIA("Olá! Espero que o dia de resgates esteja sendo produtivo. Em que posso te ajudar agora?", listOf("listar dispositivos", "conecta wifi"))
 
                     txt.contains("obrigado") || txt.contains("valeu") || txt.contains("top") ->
-                        responderIA("Disponha! É um prazer ser útil. Se precisar de mais alguma coisa, é só miar! 😺", listOf("tirar print", "modo hacker"))
+                        responderIA("Disponha! É um prazer ser útil. Se precisar de mais alguma coisa, é só perguntar!", listOf("tirar print", "modo hacker"))
                     
                     txt.contains("limpar") || txt.contains("debloat") || txt.contains("remover lixo") -> {
                     responderIA("Com certeza! Vou carregar a lista de apps e identificar o que é lixo digital para você.", listOf("Analisar Lista"))
@@ -377,14 +384,14 @@ class MainViewModel @Inject constructor(
                 delay(800) // Simular latência de rede otimizada
                 
                 val iconType = when(analysis.risk) {
-                    com.rescuedroid.rescuedroid.RiskLevel.SEGURO -> "safe"
-                    com.rescuedroid.rescuedroid.RiskLevel.CRITICO -> "danger"
+                    com.rescuedroid.rescuedroid.RiskLevel.SAFE -> "safe"
+                    com.rescuedroid.rescuedroid.RiskLevel.CRITICAL -> "danger"
                     else -> "warning"
                 }
                 
                 val info = PackageCache(
                     packageName = pkg,
-                    isSafe = analysis.risk == com.rescuedroid.rescuedroid.RiskLevel.SEGURO,
+                    isSafe = analysis.risk == com.rescuedroid.rescuedroid.RiskLevel.SAFE,
                     reason = analysis.reason + " (Web Intelligence)",
                     iconType = iconType
                 )
@@ -419,7 +426,7 @@ class MainViewModel @Inject constructor(
             
             // Filtra o que a IA ainda não conhece ou que o motor local marcou como perigoso/incerto
             val suspeitos = listaAtual.filter { 
-                it.risk == RiskLevel.PERIGOSO || it.riskReason.contains("desconhecido", ignoreCase = true) 
+                it.risk == RiskLevel.DANGEROUS || it.reason.contains("desconhecido", ignoreCase = true) 
             }.take(10) // Processamos em lotes de 10 para segurança
 
             if (suspeitos.isEmpty()) {
@@ -532,7 +539,7 @@ class MainViewModel @Inject constructor(
             refreshDebloatApps()
             delay(1000) 
             
-            val safeApps = _debloatApps.value.filter { it.risk == RiskLevel.SEGURO }
+            val safeApps = _debloatApps.value.filter { it.risk == RiskLevel.SAFE }
             
             if (safeApps.isEmpty()) {
                 addLog("✅ Nenhum app SEGURO encontrado para remoção no momento.")
@@ -652,7 +659,7 @@ class MainViewModel @Inject constructor(
                 
                 // CONEXÃO DIRETA: Se a IA de auto-conexão estiver ativa, não espera clique
                 if (_aiAutoConnect.value && device.status != DeviceStatus.ONLINE) {
-                    addLog("⚡ PicoClaw: Iniciando auto-conexão silenciosa...")
+                    addLog("⚡ IA: Iniciando auto-conexão silenciosa...")
                     if (device.type == "USB") {
                         connectUsbAdvanced(getApplication(), _usbMode.value)
                     } else {
@@ -949,71 +956,51 @@ class MainViewModel @Inject constructor(
 
     private val _appInfoCache = mutableMapOf<String, AppInfo>()
 
-    fun refreshDebloatApps() {
+    private fun getAppDetails(context: Context, pkg: String): Pair<String, Drawable?> {
+        return try {
+            val pm = context.packageManager
+            val info = pm.getApplicationInfo(pkg, 0)
+            val label = pm.getApplicationLabel(info).toString()
+            val icon = pm.getApplicationIcon(info)
+            label to icon
+        } catch (e: Exception) {
+            pkg.substringAfterLast(".") to null
+        }
+    }
+
+    fun refreshSmartDebloat(context: Context) {
         viewModelScope.launch {
             _isRefreshingApps.value = true
+            val result = mutableListOf<AppInfo>()
             try {
                 val packages = appManager.listApps()
-                val context = getApplication<Application>()
-                val pm = context.packageManager
+                packages.forEach { pkg ->
+                    val (label, icon) = getAppDetails(context, pkg)
+                    val (risk, reason) = DebloatEngine.analyze(pkg)
+                    val action = DebloatEngine.action(risk)
 
-                val appsInfo = packages.map { pkg ->
-                    // 1. Checar Cache de Memória Primeiro
-                    if (_appInfoCache.containsKey(pkg)) {
-                        return@map _appInfoCache[pkg]!!
-                    }
-
-                    // 2. Tentar obter info e ícone local (Host) como referência
-                    val (localLabel, localIcon) = try {
-                        val ai = pm.getApplicationInfo(pkg, 0)
-                        pm.getApplicationLabel(ai).toString() to pm.getApplicationIcon(ai)
-                    } catch (e: Exception) {
-                        pkg.substringAfterLast(".") to null
-                    }
-
-                    // 3. Análise de Risco (Local + Engine)
-                    val isSystem = pkg.startsWith("com.android") || pkg.startsWith("android") || pkg.contains(".system")
-                    val (risk, reason) = DebloatAnalyzer.analyze(pkg, isSystem)
-                    val action = DebloatAnalyzer.suggestAction(risk, isSystem)
-
-                    // 4. Cruzamento com Cache do Banco (IA Web)
-                    val cachedIA = packageDao.getPackageInfo(pkg)
-                    val finalRisk = if (cachedIA != null) {
-                        if (cachedIA.isSafe) RiskLevel.SEGURO else RiskLevel.PERIGOSO
-                    } else risk
-
-                    val finalReason = if (cachedIA != null) {
-                        "✅ [IA] ${cachedIA.reason}"
-                    } else reason
-
-                    val app = AppInfo(
-                        packageName = pkg,
-                        label = localLabel,
-                        icon = localIcon,
-                        isBloat = finalRisk == RiskLevel.SEGURO || finalRisk == RiskLevel.MODERADO,
-                        risk = finalRisk,
-                        riskScore = if (finalRisk == RiskLevel.SEGURO) 90 else 20,
-                        riskReason = finalReason,
-                        isSystem = isSystem,
-                        recommendedAction = if (cachedIA?.isSafe == true) Action.UNINSTALL else action
+                    result.add(
+                        AppInfo(
+                            packageName = pkg,
+                            label = label,
+                            icon = icon,
+                            risk = risk,
+                            reason = reason,
+                            suggestedAction = action
+                        )
                     )
-                    
-                    _appInfoCache[pkg] = app
-                    app
                 }
-                
-                _debloatApps.value = appsInfo
-                
-                if (_aiAutoModify.value && appsInfo.any { it.risk == RiskLevel.SEGURO }) {
-                    val count = appsInfo.count { it.risk == RiskLevel.SEGURO }
-                    responderIA("Análise concluída! Identifiquei **$count apps** seguros para remoção imediata. Deseja que eu execute a faxina?", listOf("Faxina Total", "Ver Lista"))
-                }
+                _debloatApps.value = result
             } catch (e: Exception) {
-                addLog("❌ Erro ao processar lista inteligente: ${e.message}", LogType.ERROR)
+                addLog("Erro no Smart Debloat: ${e.message}", LogType.ERROR)
             } finally {
                 _isRefreshingApps.value = false
             }
         }
+    }
+
+    fun refreshDebloatApps() {
+        refreshSmartDebloat(getApplication())
     }
 
     fun toggleHackerMode() { 
@@ -1161,7 +1148,7 @@ class MainViewModel @Inject constructor(
     fun startLogcat() {
         if (_isStreamingLogcat.value) return
         _isStreamingLogcat.value = true
-        addLog("📜 PicoClaw: Iniciando monitoramento em tempo real do sistema...", LogType.INFO)
+        addLog("📜 IA: Iniciando monitoramento em tempo real do sistema...", LogType.INFO)
         
         logcatJob = viewModelScope.launch(Dispatchers.IO) {
             val logBuffer = mutableListOf<LogEntry>()
@@ -1299,7 +1286,7 @@ class MainViewModel @Inject constructor(
 
     fun blindUnlockAdvanced() {
         viewModelScope.launch {
-            addLog("🔓 PicoClaw: Iniciando Desbloqueio Adaptativo...", LogType.COMMAND)
+            addLog("🔓 IA: Iniciando Desbloqueio Adaptativo...", LogType.COMMAND)
             val (w, h) = getScreenResolution()
             
             tecla(26) // ACORDAR
@@ -1328,7 +1315,7 @@ class MainViewModel @Inject constructor(
 
     fun scriptPersonalizadoIA(problema: String) {
         viewModelScope.launch {
-            addLog("🧠 PicoClaw: Gerando script inteligente para '$problema'...", LogType.COMMAND)
+            addLog("🧠 IA: Gerando script inteligente para '$problema'...", LogType.COMMAND)
             val scriptConteudo = when {
                 problema.contains("bateria") -> "dumpsys batterystats --reset && dumpsys battery"
                 problema.contains("rede") || problema.contains("wifi") -> "svc wifi disable && svc wifi enable && netcfg"
@@ -1344,7 +1331,7 @@ class MainViewModel @Inject constructor(
 
     fun getFastbootVars() { 
         viewModelScope.launch { 
-            addLog("⚡ PicoClaw: Lendo variáveis Fastboot...", LogType.COMMAND)
+            addLog("⚡ IA: Lendo variáveis Fastboot...", LogType.COMMAND)
             // Simulação de leitura de variáveis reais em modo fastboot
             val vars = listOf(
                 FastbootVar("version-bootloader", "0.4"),
@@ -1372,7 +1359,7 @@ class MainViewModel @Inject constructor(
 
     // Scripts Logic
     private val _supportMessages = MutableStateFlow<List<SupportChatMessage>>(listOf(
-        SupportChatMessage("Olá! Eu sou o assistente PicoClaw. Estou aqui para monitorar seu resgate e dar dicas técnicas.", false),
+        SupportChatMessage("Olá! Eu sou o assistente IA do RescueDroid. Estou aqui para monitorar seu resgate e dar dicas técnicas.", false),
         SupportChatMessage("Dica: Se o dispositivo USB não for reconhecido, verifique se a 'Depuração USB' está ativa nas Opções de Desenvolvedor.", false)
     ))
     val supportMessages: StateFlow<List<SupportChatMessage>> = _supportMessages

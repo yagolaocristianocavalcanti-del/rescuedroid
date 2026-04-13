@@ -71,24 +71,24 @@ class DebloatRiskEngine @Inject constructor() {
         return when {
             // NÍVEL 2 — IA DE DEBLOAT (Regras de Ouro)
             APPS_CRITICOS.any { p.contains(it) } || p.contains("systemui") -> 
-                Analysis(RiskLevel.CRITICO, "🛑 CRÍTICO DO SISTEMA (NÃO MEXER)", 0, "PROTEGIDO")
+                Analysis(RiskLevel.CRITICAL, "🛑 CRÍTICO DO SISTEMA (NÃO MEXER)", 0, "PROTEGIDO")
             
             p.contains("miui") || p.contains("samsung.android") && p.contains("framework") ->
-                Analysis(RiskLevel.PERIGOSO, "⚠️ COMPONENTE DE INTERFACE (PODE TRAVAR)", 20, "CUIDADO")
+                Analysis(RiskLevel.DANGEROUS, "⚠️ COMPONENTE DE INTERFACE (PODE TRAVAR)", 20, "CUIDADO")
 
             BLOATWARE_CONHECIDO.any { p.contains(it) } || p.contains("facebook") || p.contains("instagram") -> 
-                Analysis(RiskLevel.SEGURO, "🗑️ BLOATWARE/TRACKER CONHECIDO", 95, "REMOVER")
+                Analysis(RiskLevel.SAFE, "🗑️ BLOATWARE/TRACKER CONHECIDO", 95, "REMOVER")
             
             p.contains("google") && (p.contains("music") || p.contains("videos") || p.contains("magazines")) ->
-                Analysis(RiskLevel.SEGURO, "✅ APP GOOGLE OPCIONAL", 80, "REMOVER")
+                Analysis(RiskLevel.SAFE, "✅ APP GOOGLE OPCIONAL", 80, "REMOVER")
 
             p.contains("service") || p.contains("framework") -> 
-                Analysis(RiskLevel.MODERADO, "⚙️ SERVIÇO EM SEGUNDO PLANO", 40, "DESATIVAR")
+                Analysis(RiskLevel.MODERATE, "⚙️ SERVIÇO EM SEGUNDO PLANO", 40, "DESATIVAR")
 
             p.contains("carrier") || p.contains("telephony") || p.contains("overlay") ->
-                Analysis(RiskLevel.PERIGOSO, "📡 MODIFICAÇÃO DE OPERADORA/UI", 30, "RISCO MÉDIO")
+                Analysis(RiskLevel.DANGEROUS, "📡 MODIFICAÇÃO DE OPERADORA/UI", 30, "RISCO MÉDIO")
             
-            else -> Analysis(RiskLevel.MODERADO, "❓ DESCONHECIDO (NECESSITA ANÁLISE)", 50, "PESQUISAR")
+            else -> Analysis(RiskLevel.MODERATE, "❓ DESCONHECIDO (NECESSITA ANÁLISE)", 50, "PESQUISAR")
         }
     }
 }

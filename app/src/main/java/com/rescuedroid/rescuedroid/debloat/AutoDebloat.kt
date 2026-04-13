@@ -29,7 +29,7 @@ class AutoDebloat @Inject constructor(
                 val (risk, _) = riskEngine.check(pkg)
                 
                 // Só remove automaticamente o que é considerado SEGURO (Risco Baixo)
-                if (risk == RiskLevel.SEGURO) {
+                if (risk == RiskLevel.SAFE) {
                     onProgress("🚀 Removendo: $pkg")
                     adbShell.runForDevice(serial, "pm uninstall --user 0 $pkg")
                     count++

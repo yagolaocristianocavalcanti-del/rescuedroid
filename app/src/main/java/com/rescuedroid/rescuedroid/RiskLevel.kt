@@ -1,3 +1,5 @@
 package com.rescuedroid.rescuedroid
 
-enum class RiskLevel { SEGURO, MODERADO, PERIGOSO, CRITICO }
+enum class RiskLevel {
+    SAFE, MODERATE, DANGEROUS, CRITICAL
+}

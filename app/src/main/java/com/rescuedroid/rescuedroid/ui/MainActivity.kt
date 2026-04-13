@@ -140,7 +140,7 @@ fun MainContent(vm: MainViewModel) {
                 }
             }
 
-            // IA PicoClaw FAB Global
+            // IA FAB Global
             FloatingActionButton(
                 onClick = { vm.toggleSupport() },
                 containerColor = Color.Cyan,

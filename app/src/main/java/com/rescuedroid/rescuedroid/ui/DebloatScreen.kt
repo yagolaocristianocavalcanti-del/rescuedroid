@@ -117,10 +117,10 @@ fun DebloatScreen(vm: MainViewModel) {
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             RiskFilterChip("TODOS", null, Icons.Default.List, selectedRiskFilter == null) { selectedRiskFilter = null }
-            RiskFilterChip("SEGURO", RiskLevel.SEGURO, Icons.Default.CheckCircle, selectedRiskFilter == RiskLevel.SEGURO) { selectedRiskFilter = RiskLevel.SEGURO }
-            RiskFilterChip("MODERADO", RiskLevel.MODERADO, Icons.Default.Info, selectedRiskFilter == RiskLevel.MODERADO) { selectedRiskFilter = RiskLevel.MODERADO }
-            RiskFilterChip("PERIGOSO", RiskLevel.PERIGOSO, Icons.Default.Warning, selectedRiskFilter == RiskLevel.PERIGOSO) { selectedRiskFilter = RiskLevel.PERIGOSO }
-            RiskFilterChip("CRÍTICO", RiskLevel.CRITICO, Icons.Default.Dangerous, selectedRiskFilter == RiskLevel.CRITICO) { selectedRiskFilter = RiskLevel.CRITICO }
+            RiskFilterChip("SEGURO", RiskLevel.SAFE, Icons.Default.CheckCircle, selectedRiskFilter == RiskLevel.SAFE) { selectedRiskFilter = RiskLevel.SAFE }
+            RiskFilterChip("MODERADO", RiskLevel.MODERATE, Icons.Default.Info, selectedRiskFilter == RiskLevel.MODERATE) { selectedRiskFilter = RiskLevel.MODERATE }
+            RiskFilterChip("PERIGOSO", RiskLevel.DANGEROUS, Icons.Default.Warning, selectedRiskFilter == RiskLevel.DANGEROUS) { selectedRiskFilter = RiskLevel.DANGEROUS }
+            RiskFilterChip("CRÍTICO", RiskLevel.CRITICAL, Icons.Default.Dangerous, selectedRiskFilter == RiskLevel.CRITICAL) { selectedRiskFilter = RiskLevel.CRITICAL }
         }
 
         LazyColumn {
@@ -132,13 +132,13 @@ fun DebloatScreen(vm: MainViewModel) {
             items(filteredApps) { app ->
                 AppItem(app, 
                     onUninstall = { 
-                        if (app.risk == RiskLevel.CRITICO || app.risk == RiskLevel.PERIGOSO) {
+                        if (app.risk == RiskLevel.CRITICAL || app.risk == RiskLevel.DANGEROUS) {
                             actionType = "desinstalar"
                             showDangerDialog = app
                         } else vm.uninstallApp(app)
                     },
                     onDisable = { 
-                         if (app.risk == RiskLevel.CRITICO || app.risk == RiskLevel.PERIGOSO) {
+                         if (app.risk == RiskLevel.CRITICAL || app.risk == RiskLevel.DANGEROUS) {
                             actionType = "desativar"
                             showDangerDialog = app
                         } else vm.disableApp(app)
@@ -152,10 +152,10 @@ fun DebloatScreen(vm: MainViewModel) {
 @Composable
 fun RiskFilterChip(label: String, risk: RiskLevel?, icon: ImageVector, isSelected: Boolean, onClick: () -> Unit) {
     val color = when(risk) {
-        RiskLevel.SEGURO -> Color(0xFF4CAF50)
-        RiskLevel.MODERADO -> Color.Gray
-        RiskLevel.PERIGOSO -> Color(0xFFFF9800)
-        RiskLevel.CRITICO -> Color(0xFFF44336)
+        RiskLevel.SAFE -> Color(0xFF4CAF50)
+        RiskLevel.MODERATE -> Color.Gray
+        RiskLevel.DANGEROUS -> Color(0xFFFF9800)
+        RiskLevel.CRITICAL -> Color(0xFFF44336)
         else -> Color.Cyan
     }
     
@@ -185,9 +185,9 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
             .animateContentSize(), // ✨ ANIMAÇÃO SUAVE
         colors = CardDefaults.cardColors(containerColor = Color(0xFF0A0A0A)),
         border = BorderStroke(1.dp, when(app.risk) {
-            RiskLevel.CRITICO -> Color(0xFFF44336)
-            RiskLevel.PERIGOSO -> Color(0xFFFF9800)
-            RiskLevel.MODERADO -> Color.DarkGray
+            RiskLevel.CRITICAL -> Color(0xFFF44336)
+            RiskLevel.DANGEROUS -> Color(0xFFFF9800)
+            RiskLevel.MODERATE -> Color.DarkGray
             else -> Color(0xFF222222)
         })
     ) {
@@ -219,8 +219,8 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
                         RiskBadge(app.risk)
                     }
                     Text(app.packageName, color = Color.Gray, fontSize = 10.sp)
-                    if (app.riskReason.isNotEmpty() && !expanded) {
-                        Text(app.riskReason, color = Color.Cyan.copy(alpha = 0.7f), fontSize = 9.sp, fontStyle = FontStyle.Italic, maxLines = 1)
+                    if (app.reason.isNotEmpty() && !expanded) {
+                        Text(app.reason, color = Color.Cyan.copy(alpha = 0.7f), fontSize = 9.sp, fontStyle = FontStyle.Italic, maxLines = 1)
                     }
                 }
                 IconButton(onClick = onDisable) { Icon(Icons.Default.Block, null, tint = Color.Yellow, modifier = Modifier.size(20.dp)) }
@@ -234,18 +234,17 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(Modifier.padding(12.dp)) {
-                        if (app.riskReason.isNotEmpty()) {
-                            Text("🔍 Análise: ${app.riskReason}", color = Color.Cyan, fontSize = 11.sp)
+                        if (app.reason.isNotEmpty()) {
+                            Text("🔍 Análise: ${app.reason}", color = Color.Cyan, fontSize = 11.sp)
                         }
-                        if (app.recommendedAction != Action.KEEP) {
-                            val actionText = when(app.recommendedAction) {
+                        if (app.suggestedAction != Action.KEEP) {
+                            val actionText = when(app.suggestedAction) {
                                 Action.UNINSTALL -> "Desinstalação Sugerida"
                                 Action.DISABLE -> "Desativação Recomendada"
                                 else -> "Manter"
                             }
                             Text("💡 $actionText", color = Color.Green, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
-                        Text("🛠️ Tipo: ${if (app.isSystem) "Sistema" else "Usuário"}", color = Color.Gray, fontSize = 10.sp)
                     }
                 }
             }
@@ -256,10 +255,10 @@ fun AppItem(app: AppInfo, onUninstall: () -> Unit, onDisable: () -> Unit) {
 @Composable
 fun RiskBadge(risk: RiskLevel) {
     val cor = when(risk) {
-        RiskLevel.SEGURO -> Color(0xFF4CAF50)
-        RiskLevel.MODERADO -> Color.Gray
-        RiskLevel.PERIGOSO -> Color(0xFFFF9800)
-        RiskLevel.CRITICO -> Color(0xFFF44336)
+        RiskLevel.SAFE -> Color(0xFF4CAF50)
+        RiskLevel.MODERATE -> Color.Gray
+        RiskLevel.DANGEROUS -> Color(0xFFFF9800)
+        RiskLevel.CRITICAL -> Color(0xFFF44336)
     }
     
     Box(

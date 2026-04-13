@@ -24,7 +24,7 @@ class DebloatAI @Inject constructor(
             val (risk, reason) = riskEngine.check(pkg)
             
             // Sugestão lógica baseada no risco e em palavras-chave
-            val shouldRemove = risk == RiskLevel.SEGURO && (
+            val shouldRemove = risk == RiskLevel.SAFE && (
                 pkg.contains("facebook") || 
                 pkg.contains("skype") || 
                 pkg.contains("analytics") || 

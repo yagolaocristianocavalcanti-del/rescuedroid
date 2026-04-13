@@ -26,28 +26,28 @@ object DebloatAnalyzer {
 
         return when {
             criticalList.any { lower.contains(it) } ->
-                RiskLevel.CRITICO to "Componente essencial do sistema (Protegido)"
+                RiskLevel.CRITICAL to "Componente essencial do sistema (Protegido)"
 
             safeList.any { lower.contains(it) } ->
-                RiskLevel.SEGURO to "Bloatware conhecido / App de terceiro"
+                RiskLevel.SAFE to "Bloatware conhecido / App de terceiro"
 
             warningList.any { lower.contains(it) } ->
-                RiskLevel.PERIGOSO to "App de utilidade básica (Pode afetar experiência)"
+                RiskLevel.DANGEROUS to "App de utilidade básica (Pode afetar experiência)"
 
             isSystem ->
-                RiskLevel.MODERADO to "App de sistema genérico"
+                RiskLevel.MODERATE to "App de sistema genérico"
 
             else ->
-                RiskLevel.SEGURO to "App de usuário instalado manualmente"
+                RiskLevel.SAFE to "App de usuário instalado manualmente"
         }
     }
 
     fun suggestAction(risk: RiskLevel, isSystem: Boolean): Action {
         return when (risk) {
-            RiskLevel.SEGURO -> if (isSystem) Action.DISABLE else Action.UNINSTALL
-            RiskLevel.MODERADO -> Action.KEEP
-            RiskLevel.PERIGOSO -> Action.KEEP
-            RiskLevel.CRITICO -> Action.KEEP
+            RiskLevel.SAFE -> if (isSystem) Action.DISABLE else Action.UNINSTALL
+            RiskLevel.MODERATE -> Action.KEEP
+            RiskLevel.DANGEROUS -> Action.KEEP
+            RiskLevel.CRITICAL -> Action.KEEP
         }
     }
 }

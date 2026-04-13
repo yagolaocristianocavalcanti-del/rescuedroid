@@ -6,8 +6,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
@@ -26,6 +29,9 @@ fun SettingsScreen(vm: MainViewModel) {
     val aiAutoConnect by vm.aiAutoConnect.collectAsStateWithLifecycle()
     val aiAutoModify by vm.aiAutoModify.collectAsStateWithLifecycle()
     val appLanguage by vm.appLanguage.collectAsStateWithLifecycle()
+    val isIAReady by vm.isIAReady.collectAsStateWithLifecycle()
+    val isIADownloading by vm.isIADownloading.collectAsStateWithLifecycle()
+    val iaDownloadProgress by vm.iaDownloadProgress.collectAsStateWithLifecycle()
     
     Column(
         modifier = Modifier
@@ -57,7 +63,7 @@ fun SettingsScreen(vm: MainViewModel) {
             )
         }
 
-        SettingsSection("Inteligência Artificial (PicoClaw)") {
+        SettingsSection("Inteligência Artificial") {
             SettingsToggleItem(
                 title = "Auto-Conexão Inteligente",
                 description = "Permitir que a IA tente conexões sozinha",
@@ -72,6 +78,54 @@ fun SettingsScreen(vm: MainViewModel) {
                 icon = Icons.Default.SmartToy,
                 onCheckedChange = { vm.toggleAiAutoModify() }
             )
+
+            // Status da IA (LED e Download)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Memory, contentDescription = null, tint = Color.Cyan, modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Motor Local (Gemma)", color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                    val statusText = when {
+                        isIADownloading -> {
+                            val percent = (iaDownloadProgress * 100).toInt()
+                            "Baixando arquivos do modelo (270MB)... $percent%"
+                        }
+                        isIAReady -> "IA Pronta e Operacional"
+                        else -> "Aguardando inicialização..."
+                    }
+                    Text(statusText, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                    
+                    if (isIADownloading) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { iaDownloadProgress },
+                            modifier = Modifier.fillMaxWidth().height(4.dp),
+                            color = Color.Cyan,
+                            trackColor = Color.DarkGray,
+                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    }
+                }
+                
+                // LED Indicativo
+                val ledColor = when {
+                    isIADownloading -> Color.Yellow
+                    isIAReady -> Color.Green
+                    else -> Color.Red
+                }
+                
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .background(ledColor, CircleShape)
+                        .padding(2.dp)
+                )
+            }
         }
         
         SettingsSection("Conexão") {
@@ -85,7 +139,7 @@ fun SettingsScreen(vm: MainViewModel) {
         }
         
         SettingsSection("Sobre") {
-            SettingsItem("Versão", "2.0.0-BETA", Icons.Default.Info)
+            SettingsItem("Versão", "2.1.0-STABLE", Icons.Default.Info)
             SettingsItem("Desenvolvedor", "RescueDroid Team", Icons.Default.ColorLens)
         }
     }
